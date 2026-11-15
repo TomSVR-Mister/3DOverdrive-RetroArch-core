@@ -10,6 +10,15 @@ The core adds the enhanced-pack layer on top.
 
 The first supported title is **Sewer Shark** (Digital Pictures, 1993).
 
+## Downloads
+
+- **Core:** prebuilt for Windows, Linux, macOS and Android on the
+  [Releases page](https://github.com/TomSVR-Mister/3DOverdrive-RetroArch-core/releases).
+- **Sewer Shark enhanced video pack:**
+  [archive.org/details/sewer-shark-hd](https://archive.org/details/sewer-shark-hd)
+  (`SewerSharkHD.3dov`, about 1.8 GB). It only works together with your own
+  copy of the game.
+
 ## Screenshots
 
 Original 3DO video on the left (scaled up), enhanced pack on the right.
@@ -37,8 +46,8 @@ changes what is drawn.
 - This core (see [Building](#building)), installed in RetroArch's `cores` folder.
 - A 3DO BIOS, as for Opera (see [README-Opera.md](README-Opera.md)).
 - Your own copy of the game.
-- An enhanced pack for the game. **Packs are not included in this
-  repository** and the game and BIOS are not distributed here.
+- The enhanced pack for the game (see [Downloads](#downloads)). Packs are
+  not part of this repository, and the game and BIOS are not distributed here.
 
 Without a pack the core behaves like plain Opera.
 
@@ -107,6 +116,10 @@ Same as Opera:
 make                      # Linux
 make platform=win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar   # Windows (MinGW cross-compile)
 ```
+
+Android: `ndk-build -C jni APP_ABI=arm64-v8a`. GitHub Actions builds all
+platforms on every push (see `.github/workflows/build.yml`); pushing a
+`v*` tag publishes a release.
 
 The output keeps Opera's file name (`opera_libretro.so` / `opera_libretro.dll`),
 so RetroArch shows it as Opera.

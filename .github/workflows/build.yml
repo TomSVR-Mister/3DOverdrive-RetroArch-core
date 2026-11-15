@@ -1,0 +1,83 @@
+name: Build cores
+
+# Builds the core for Windows, Linux, macOS and Android on every push to main.
+# Pushing a version tag (v1.0.0, ...) also publishes a GitHub Release with
+# the builds attached as zip files.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -j"$(nproc)"
+      - run: |
+          mkdir -p dist && cp opera_libretro.so LICENSE dist/
+          cd dist && zip -9 ../3doverdrive-linux-x64.zip *
+      - uses: actions/upload-artifact@v4
+        with: { name: linux-x64, path: 3doverdrive-linux-x64.zip }
+
+  windows:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - run: make -j"$(nproc)" platform=win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar
+      - run: |
+          mkdir -p dist && cp opera_libretro.dll LICENSE dist/
+          cd dist && zip -9 ../3doverdrive-windows-x64.zip *
+      - uses: actions/upload-artifact@v4
+        with: { name: windows-x64, path: 3doverdrive-windows-x64.zip }
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -j"$(sysctl -n hw.ncpu)" platform=osx ARCHFLAGS="-arch arm64 -arch x86_64"
+      - run: |
+          mkdir -p dist && cp opera_libretro.dylib LICENSE dist/
+          cd dist && zip -9 ../3doverdrive-macos-universal.zip *
+      - uses: actions/upload-artifact@v4
+        with: { name: macos-universal, path: 3doverdrive-macos-universal.zip }
+
+  android:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          "$ANDROID_NDK_LATEST_HOME/ndk-build" -j"$(nproc)" -C jni \
+            APP_ABI="arm64-v8a armeabi-v7a" APP_PLATFORM=android-21
+      - run: |
+          mkdir -p dist/arm64-v8a dist/armeabi-v7a
+          cp libs/arm64-v8a/libretro.so dist/arm64-v8a/opera_libretro_android.so
+          cp libs/armeabi-v7a/libretro.so dist/armeabi-v7a/opera_libretro_android.so
+          cp LICENSE dist/
+          cd dist && zip -9 -r ../3doverdrive-android.zip .
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: 3doverdrive-android.zip }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos, android]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          body: |
+            Prebuilt 3DOverdrive cores. Unzip and put the core file in RetroArch's `cores` folder
+            (Android: load the `.so` for your device's ABI through RetroArch's "Install or Restore a Core").
+
+            Sewer Shark enhanced video pack: https://archive.org/details/sewer-shark-hd
+            Put `SewerSharkHD.3dov` in RetroArch's `system` folder. You need your own copy of the game and a 3DO BIOS.
