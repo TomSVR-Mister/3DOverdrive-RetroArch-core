@@ -1,8 +1,9 @@
 name: Build cores
 
 # Builds the core for Windows, Linux, macOS and Android on every push to main.
-# Pushing a version tag (v1.0.0, ...) also publishes a GitHub Release with
-# the builds attached as zip files.
+# To publish a release: Actions > Build cores > Run workflow, enter a version
+# (e.g. v1.0.0). Pushing a v* tag does the same. The release gets the four
+# builds as zip files.
 
 on:
   push:
@@ -10,6 +11,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Version to publish as a release (e.g. v1.0.0); leave empty to just build'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -66,7 +72,7 @@ jobs:
         with: { name: android, path: 3doverdrive-android.zip }
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release != ''
     needs: [linux, windows, macos, android]
     runs-on: ubuntu-22.04
     steps:
@@ -74,6 +80,9 @@ jobs:
         with: { path: out, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.release || github.ref_name }}
+          name: 3DOverdrive ${{ github.event.inputs.release || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: out/*.zip
           body: |
             Prebuilt 3DOverdrive cores. Unzip and put the core file in RetroArch's `cores` folder
