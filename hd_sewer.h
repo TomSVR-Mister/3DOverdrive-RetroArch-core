@@ -3,6 +3,7 @@
 #include <stdint.h>
 void hd_sewer_init(const char *system_dir_, const char *game_path_);
 void hd_sewer_deinit(void);
+void hd_sewer_set_disc_key(uint64_t key_);
 const uint32_t *hd_sewer_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int *oh_);
 int  hd_sewer_scale(void);
 int  hd_sewer_active(void);

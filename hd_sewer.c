@@ -1,5 +1,5 @@
 /*
-  Sewer Shark HD: replaces the game's FMV with pre-made 2x (AI-cleaned) frames.
+  Sewer Shark HD: replaces the game's FMV with pre-made 2x/4x (AI-cleaned) frames.
 
   The game decodes its video with the CPU straight into VRAM; cockpit, crosshair
   and other overlays are drawn by MADAM (cels). libopera keeps a per-pixel
@@ -7,9 +7,10 @@
   fingerprinted (12x8 grey thumbnail), matched against the pack index, and every
   pixel that was not drawn by MADAM is replaced by the matching 2x HD pixel.
 
-  Pack layout (in the RetroArch system folder, or $SEWERSHARK_HD):
-    SewerSharkHD/index.bin
-    SewerSharkHD/<seq>/<track>/fNNNNN.png   (2x Topaz output, one per frame)
+  Pack: one SewerSharkHD.3dov file in the RetroArch system folder (see the
+  pack access section below), or for building/testing an unpacked folder:
+    SewerSharkHD/index.bin, scale.txt, art/, sprites/,
+    SewerSharkHD/<seq>/<track>/fNNNNN.webp|png   (one per video frame)
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,36 +25,7 @@
 #include "stb_image.h"
 #include "src/webp/decode.h"
 #include <rthreads/rthreads.h>
-
-/* load <base>.webp, else <base>.png, as RGBA; free() with stbi_image_free */
-static uint8_t*
-load_img(const char *base_, int *w_, int *h_)
-{
-  char p[1500];
-  FILE *f;
-  int n;
-  snprintf(p,sizeof(p),"%s.webp",base_);
-  f = fopen(p,"rb");
-  if(f)
-    {
-      long sz; uint8_t *buf, *out = NULL; int w, h;
-      fseek(f,0,SEEK_END); sz = ftell(f); fseek(f,0,SEEK_SET);
-      buf = (uint8_t*)malloc(sz > 0 ? sz : 1);
-      if(buf && fread(buf,1,sz,f) == (size_t)sz && WebPGetInfo(buf,sz,&w,&h))
-        {
-          out = (uint8_t*)malloc((size_t)w * h * 4);
-          if(out && WebPDecodeRGBAInto(buf,sz,out,(size_t)w * h * 4,w * 4))
-            { *w_ = w; *h_ = h; }
-          else
-            { free(out); out = NULL; }
-        }
-      free(buf);
-      fclose(f);
-      return out;
-    }
-  snprintf(p,sizeof(p),"%s.png",base_);
-  return stbi_load(p,w_,h_,&n,4);
-}
+#include <sys/types.h>
 
 /* pack scale (2 or 4) and the 4x output buffer */
 static int       SCALE = 2;
@@ -95,6 +67,224 @@ static hd_ent_t *E      = NULL;
 static int       N      = 0;
 static char      ROOT[1024];
 static int       ACTIVE = 0;
+
+/*
+  Pack access. A pack is either a folder (for building/testing) or one
+  .3dov file: header, table of contents, then every file of the folder.
+  The table and the files are XOR-ed with a keystream derived from sectors
+  of the user's own game disc (hd_sewer_set_disc_key), so the pack is only
+  readable together with the game.
+
+  .3dov header (little endian):
+    char magic[8] "3DOVPAK1", u32 count, u32 toc_size, u64 toc_off, u64 check
+  toc (encrypted, stream id 0xFFFFFFFF): per file u64 off, u32 size, u16 name
+    length, name ("index.bin", "art/cockpit_hd.png", "26332311/t01/f00843.webp")
+  file k: size bytes at off, encrypted with stream id k.
+*/
+#if defined(_WIN32)
+#define PK_SEEK(f_,o_) _fseeki64((f_),(__int64)(o_),SEEK_SET)
+#else
+#define PK_SEEK(f_,o_) fseeko((f_),(off_t)(o_),SEEK_SET)
+#endif
+
+typedef struct { uint64_t off; uint32_t size; uint32_t name; } pk_ent_t;
+static FILE     *PK      = NULL;
+static slock_t  *PK_LOCK = NULL;
+static pk_ent_t *PKE     = NULL;
+static char     *PKNAMES = NULL;
+static uint32_t  PKN     = 0;
+static uint32_t *PKH     = NULL;    /* hash -> entry index + 1 */
+static uint32_t  PKHN    = 0;
+static uint64_t  PK_KEY  = 0;
+static uint64_t  DISC_KEY = 0;
+
+void
+hd_sewer_set_disc_key(uint64_t key_)
+{
+  DISC_KEY = key_;
+}
+
+static uint64_t
+pk_mix(uint64_t z_)
+{
+  z_ += 0x9E3779B97F4A7C15ULL;
+  z_ = (z_ ^ (z_ >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z_ = (z_ ^ (z_ >> 27)) * 0x94D049BB133111EBULL;
+  return z_ ^ (z_ >> 31);
+}
+
+static void
+pk_crypt(uint8_t *p_, size_t n_, uint32_t stream_)
+{
+  uint64_t base = PK_KEY ^ ((uint64_t)stream_ << 32);
+  size_t i, j;
+  for(i = 0; i * 8 < n_; i++)
+    {
+      uint64_t k = pk_mix(base ^ (uint64_t)i);
+      size_t m = (n_ - i * 8 < 8) ? n_ - i * 8 : 8;
+      for(j = 0; j < m; j++)
+        p_[i * 8 + j] ^= (uint8_t)(k >> (8 * j));
+    }
+}
+
+static uint32_t
+pk_hash(const char *s_, size_t n_)
+{
+  uint32_t h = 2166136261u;
+  while(n_--) { h ^= (uint8_t)*s_++; h *= 16777619u; }
+  return h;
+}
+
+static void
+pk_close(void)
+{
+  if(PK) fclose(PK);
+  PK = NULL;
+  free(PKE); PKE = NULL;
+  free(PKNAMES); PKNAMES = NULL;
+  free(PKH); PKH = NULL;
+  PKN = PKHN = 0;
+  if(PK_LOCK) { slock_free(PK_LOCK); PK_LOCK = NULL; }
+}
+
+static uint32_t rd32(const uint8_t *p_) { return p_[0] | (p_[1] << 8) | (p_[2] << 16) | ((uint32_t)p_[3] << 24); }
+static uint64_t rd64(const uint8_t *p_) { return rd32(p_) | ((uint64_t)rd32(p_ + 4) << 32); }
+
+/* open a .3dov pack; 1 = ok, 0 = not a pack, -1 = pack for another disc */
+static int
+pk_open(const char *path_)
+{
+  uint8_t hd[32], *toc = NULL;
+  uint32_t count, tsz, i, pos, nm = 0;
+  uint64_t toff;
+  FILE *f = fopen(path_,"rb");
+  if(!f)
+    return 0;
+  if(fread(hd,1,32,f) != 32 || memcmp(hd,"3DOVPAK1",8))
+    { fclose(f); return 0; }
+  count = rd32(hd + 8); tsz = rd32(hd + 12); toff = rd64(hd + 16);
+  if(rd64(hd + 24) != pk_mix(DISC_KEY ^ 0x3D0F00DULL))
+    { fclose(f); return -1; }
+  pk_close();
+  PK_KEY = DISC_KEY;
+  toc = (uint8_t*)malloc(tsz ? tsz : 1);
+  PKE = (pk_ent_t*)calloc(count ? count : 1,sizeof(pk_ent_t));
+  PKNAMES = (char*)malloc(tsz + count + 1);
+  for(PKHN = 1; PKHN < count * 2; PKHN <<= 1) ;
+  PKH = (uint32_t*)calloc(PKHN,sizeof(uint32_t));
+  if(!toc || !PKE || !PKNAMES || !PKH || PK_SEEK(f,toff) || fread(toc,1,tsz,f) != tsz)
+    { free(toc); fclose(f); pk_close(); return 0; }
+  pk_crypt(toc,tsz,0xFFFFFFFFu);
+  for(i = 0, pos = 0; i < count && pos + 14 <= tsz; i++)
+    {
+      uint32_t ln = toc[pos + 12] | (toc[pos + 13] << 8), h;
+      if(pos + 14 + ln > tsz) break;
+      PKE[i].off = rd64(toc + pos); PKE[i].size = rd32(toc + pos + 8); PKE[i].name = nm;
+      memcpy(PKNAMES + nm,toc + pos + 14,ln); PKNAMES[nm + ln] = 0;
+      h = pk_hash(PKNAMES + nm,ln) & (PKHN - 1);
+      while(PKH[h]) h = (h + 1) & (PKHN - 1);
+      PKH[h] = i + 1;
+      nm += ln + 1; pos += 14 + ln;
+    }
+  free(toc);
+  PKN = i;
+  PK = f;
+  PK_LOCK = slock_new();
+  return PKN ? 1 : 0;
+}
+
+/* read a pack file (pack or folder) into malloc'd memory */
+static uint8_t*
+pk_get(const char *rel_, size_t *n_)
+{
+  uint8_t *p = NULL;
+  if(PK)
+    {
+      uint32_t h = pk_hash(rel_,strlen(rel_)) & (PKHN - 1), i;
+      while((i = PKH[h]) != 0 && strcmp(PKNAMES + PKE[i - 1].name,rel_))
+        h = (h + 1) & (PKHN - 1);
+      if(!i) return NULL;
+      i--;
+      p = (uint8_t*)malloc(PKE[i].size + 1);
+      if(!p) return NULL;
+      slock_lock(PK_LOCK);
+      if(PK_SEEK(PK,PKE[i].off) || fread(p,1,PKE[i].size,PK) != PKE[i].size)
+        { slock_unlock(PK_LOCK); free(p); return NULL; }
+      slock_unlock(PK_LOCK);
+      pk_crypt(p,PKE[i].size,i);
+      p[PKE[i].size] = 0;
+      *n_ = PKE[i].size;
+      return p;
+    }
+  else
+    {
+      char path[1500];
+      FILE *f;
+      long sz;
+      snprintf(path,sizeof(path),"%s/%s",ROOT,rel_);
+      f = fopen(path,"rb");
+      if(!f) return NULL;
+      fseek(f,0,SEEK_END); sz = ftell(f); fseek(f,0,SEEK_SET);
+      p = (uint8_t*)malloc(sz > 0 ? sz + 1 : 1);
+      if(p && fread(p,1,sz,f) == (size_t)sz) { p[sz] = 0; *n_ = sz; }
+      else { free(p); p = NULL; }
+      fclose(f);
+      return p;
+    }
+}
+
+/* decode a WebP or PNG file to RGBA; free() the result */
+static uint8_t*
+img_decode(const uint8_t *buf_, size_t n_, int *w_, int *h_)
+{
+  int w, h, c;
+  if(n_ >= 12 && !memcmp(buf_,"RIFF",4) && !memcmp(buf_ + 8,"WEBP",4))
+    {
+      uint8_t *out;
+      if(!WebPGetInfo(buf_,n_,&w,&h)) return NULL;
+      out = (uint8_t*)malloc((size_t)w * h * 4);
+      if(out && WebPDecodeRGBAInto(buf_,n_,out,(size_t)w * h * 4,w * 4))
+        { *w_ = w; *h_ = h; return out; }
+      free(out);
+      return NULL;
+    }
+  return stbi_load_from_memory(buf_,(int)n_,w_,h_,&c,4);
+}
+
+/* load pack file <rel> exactly as named, as RGBA */
+static uint8_t*
+load_file_img(const char *rel_, int *w_, int *h_)
+{
+  size_t n = 0;
+  uint8_t *b = pk_get(rel_,&n), *img;
+  if(!b) return NULL;
+  img = img_decode(b,n,w_,h_);
+  free(b);
+  return img;
+}
+
+/* load <rel>.webp, else <rel>.png, as RGBA */
+static uint8_t*
+load_img(const char *rel_, int *w_, int *h_)
+{
+  char p[1400];
+  uint8_t *img;
+  snprintf(p,sizeof(p),"%s.webp",rel_);
+  if((img = load_file_img(p,w_,h_)) != NULL) return img;
+  snprintf(p,sizeof(p),"%s.png",rel_);
+  return load_file_img(p,w_,h_);
+}
+
+/* next line of a text buffer (modifies it); NULL at end */
+static char*
+next_line(char **pp_)
+{
+  char *s = *pp_, *e;
+  if(!s || !*s) return NULL;
+  e = strchr(s,'\n');
+  if(e) { *e = 0; *pp_ = e + 1; } else *pp_ = s + strlen(s);
+  return s;
+}
 
 static float     LAST_TH[NWIN][96];
 static int       LAST_M[NWIN];
@@ -227,28 +417,35 @@ ci_contains(const char *h_, const char *n_)
   return 0;
 }
 
+/* use pack <root_>: a .3dov file or a folder; 1 = ok */
 static int
 try_root(const char *root_)
 {
-  char path[1200];
-  FILE *f;
-  long sz;
-  size_t n;
+  uint8_t *b;
+  size_t sz = 0;
+  int r;
 
-  snprintf(path,sizeof(path),"%s/index.bin",root_);
-  f = fopen(path,"rb");
-  if(!f)
-    return 0;
-  fseek(f,0,SEEK_END); sz = ftell(f); fseek(f,0,SEEK_SET);
-  hd_sewer_deinit();          /* the decoder thread reads E */
+  hd_sewer_deinit();          /* the decoder thread reads E and the pack */
+  pk_close();
+  r = pk_open(root_);
+  if(r < 0)
+    {
+      if(retro_log_printf_cb)
+        retro_log_printf_cb(RETRO_LOG_WARN,"[3DOverdrive] %s is for a different disc; enhanced video off\n",root_);
+      return 0;
+    }
+  if(r == 0)
+    snprintf(ROOT,sizeof(ROOT),"%s",root_);
+  b = pk_get("index.bin",&sz);
+  if(!b)
+    { pk_close(); return 0; }
   free(E);
-  E = (hd_ent_t*)malloc(sz);
+  E = (hd_ent_t*)b;
   N = (int)(sz / sizeof(hd_ent_t));
-  n = E ? fread(E,sizeof(hd_ent_t),N,f) : 0;
-  fclose(f);
-  if(N <= 0 || n != (size_t)N)
-    { N = 0; return 0; }
-  snprintf(ROOT,sizeof(ROOT),"%s",root_);
+  if(N <= 0)
+    { pk_close(); N = 0; return 0; }
+  if(retro_log_printf_cb)
+    retro_log_printf_cb(RETRO_LOG_INFO,"[3DOverdrive] enhanced pack: %s (%d frames)\n",root_,N);
   return 1;
 }
 
@@ -290,7 +487,12 @@ hd_sewer_init(const char *system_dir_, const char *game_path_)
           fclose(f);
         }
     }
-  /* 3: <system>/SewerSharkHD */
+  /* 3: <system>/SewerSharkHD.3dov, or the unpacked folder <system>/SewerSharkHD */
+  if(!ok && system_dir_)
+    {
+      snprintf(path,sizeof(path),"%s/SewerSharkHD.3dov",system_dir_);
+      ok = try_root(path);
+    }
   if(!ok && system_dir_)
     {
       snprintf(path,sizeof(path),"%s/SewerSharkHD",system_dir_);
@@ -305,8 +507,13 @@ hd_sewer_init(const char *system_dir_, const char *game_path_)
       { char *q = strrchr(path,'\\'); if(q > p) p = q; }
       if(p)
         {
-          snprintf(p + 1,sizeof(path) - (p + 1 - path),"SewerSharkHD");
+          snprintf(p + 1,sizeof(path) - (p + 1 - path),"SewerSharkHD.3dov");
           ok = try_root(path);
+          if(!ok)
+            {
+              snprintf(p + 1,sizeof(path) - (p + 1 - path),"SewerSharkHD");
+              ok = try_root(path);
+            }
         }
     }
   if(!ok)
@@ -319,10 +526,10 @@ hd_sewer_init(const char *system_dir_, const char *game_path_)
   art_load();
   spr_load();
   SCALE = 2;
-  snprintf(path,sizeof(path),"%s/scale.txt",ROOT);   /* "4" for a 4x pack */
-  {
-    FILE *sf = fopen(path,"r");
-    if(sf) { int v = 0; if(fscanf(sf,"%d",&v) == 1 && v == 4) SCALE = 4; fclose(sf); }
+  {                                                  /* "4" for a 4x pack */
+    size_t n = 0;
+    char *t = (char*)pk_get("scale.txt",&n);
+    if(t) { if(atoi(t) == 4) SCALE = 4; free(t); }
   }
   if(SCALE == 2 && N > 0)
     {
@@ -355,7 +562,7 @@ static int        PF_QUIT = 0;
 static void
 hd_path(int i_, char *path_, size_t n_)
 {
-  snprintf(path_,n_,"%s/%.8s/%.3s/f%05u",ROOT,E[i_].seq,E[i_].trk,(unsigned)E[i_].j);
+  snprintf(path_,n_,"%.8s/%.3s/f%05u",E[i_].seq,E[i_].trk,(unsigned)E[i_].j);
 }
 
 static void
@@ -412,18 +619,22 @@ void
 hd_sewer_deinit(void)
 {
   int k;
-  if(!PF_TH)
-    return;
-  slock_lock(PF_LOCK);
-  PF_QUIT = 1;
-  scond_signal(PF_COND);
-  slock_unlock(PF_LOCK);
-  sthread_join(PF_TH);
-  PF_TH = NULL;
-  for(k = 0; k < PF; k++)
-    { free(PFC[k].pix); PFC[k].pix = NULL; PFC[k].idx = -1; }
-  scond_free(PF_COND); PF_COND = NULL;
-  slock_free(PF_LOCK); PF_LOCK = NULL;
+  if(PF_TH)
+    {
+      slock_lock(PF_LOCK);
+      PF_QUIT = 1;
+      scond_signal(PF_COND);
+      slock_unlock(PF_LOCK);
+      sthread_join(PF_TH);
+      PF_TH = NULL;
+      for(k = 0; k < PF; k++)
+        { free(PFC[k].pix); PFC[k].pix = NULL; PFC[k].idx = -1; }
+      scond_free(PF_COND); PF_COND = NULL;
+      slock_free(PF_LOCK); PF_LOCK = NULL;
+    }
+  for(k = 0; k < CACHE; k++)
+    { free(C_PIX[k]); C_PIX[k] = NULL; C_IDX[k] = -1; }
+  pk_close();
 }
 
 /* ask the worker for the frames after i_ in the same shot (newest first) */
@@ -607,20 +818,21 @@ static int   NART = 0;
 static void
 art_load(void)
 {
-  char path[1400], name[256];
-  FILE *f;
-  int x,y,i,n,w2,h2;
+  char path[1400], name[256], *txt, *cur, *ln;
+  size_t tn = 0;
+  int x,y,i,w2,h2;
   for(i = 0; i < NART; i++) { stbi_image_free(ART[i].lo); stbi_image_free(ART[i].hd); }
   NART = 0;
-  snprintf(path,sizeof(path),"%s/art/art.txt",ROOT);
-  f = fopen(path,"r");
-  if(!f) return;
-  while(NART < MAXART && fscanf(f,"%255s %d %d",name,&x,&y) == 3)
+  txt = (char*)pk_get("art/art.txt",&tn);
+  if(!txt) return;
+  cur = txt;
+  while(NART < MAXART && (ln = next_line(&cur)) != NULL)
     {
       art_t *a = &ART[NART];
-      snprintf(path,sizeof(path),"%s/art/%s_lo",ROOT,name);
-      a->lo = load_img(path,&a->w,&a->h); (void)n;
-      snprintf(path,sizeof(path),"%s/art/%s_hd",ROOT,name);
+      if(sscanf(ln,"%255s %d %d",name,&x,&y) != 3) continue;
+      snprintf(path,sizeof(path),"art/%s_lo",name);
+      a->lo = load_img(path,&a->w,&a->h);
+      snprintf(path,sizeof(path),"art/%s_hd",name);
       a->hd = load_img(path,&w2,&h2);
       a->f = (a->lo && w2 == 4*a->w && h2 == 4*a->h) ? 4 : 2;
       if(!a->lo || !a->hd || w2 != a->f*a->w || h2 != a->f*a->h ||
@@ -634,7 +846,7 @@ art_load(void)
       a->pause = !strcmp(name,"paused_sign");
       NART++;
     }
-  fclose(f);
+  free(txt);
 }
 
 static inline int
@@ -848,32 +1060,33 @@ hd_cel_lookup(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, uint32_t flags_, 
 static void
 spr_load(void)
 {
-  char path[1400], hex[64], file[256];
+  char path[1400], hex[64], file[256], *txt, *cur, *ln;
+  size_t tn = 0;
   unsigned len, fnv;
-  int w, h, i, n, w2, h2;
-  FILE *f;
+  int w, h, i, w2, h2;
 
   for(i = 0; i < NSPR; i++) stbi_image_free(SPR[i].img);
   free(SPR); SPR = NULL; NSPR = 0;
   memset(SC,0xFF,sizeof(SC));
   opera_hd_cel_lookup = hd_cel_lookup;   /* also handles video-frame copies */
 
-  snprintf(path,sizeof(path),"%s/sprites/sprites.txt",ROOT);
-  f = fopen(path,"r");
-  if(!f) return;
+  txt = (char*)pk_get("sprites/sprites.txt",&tn);
+  if(!txt) return;
+  cur = txt;
   SPR = (spr_t*)calloc(1024,sizeof(spr_t));
-  while(NSPR < 1024 && fscanf(f,"%63s %u %x %d %d %255s",hex,&len,&fnv,&w,&h,file) == 6)
+  while(SPR && NSPR < 1024 && (ln = next_line(&cur)) != NULL)
     {
       spr_t *s = &SPR[NSPR];
+      if(sscanf(ln,"%63s %u %x %d %d %255s",hex,&len,&fnv,&w,&h,file) != 6) continue;
       if(strlen(hex) != 32) continue;
       for(i = 0; i < 16; i++) { unsigned b; sscanf(hex + 2*i,"%2x",&b); s->pre[i] = b; }
-      snprintf(path,sizeof(path),"%s/sprites/%s",ROOT,file);
-      s->img = stbi_load(path,&w2,&h2,&n,4);
+      snprintf(path,sizeof(path),"sprites/%s",file);
+      s->img = load_file_img(path,&w2,&h2);
       if(!s->img || w2 != 2*w || h2 != 2*h) { if(s->img) stbi_image_free(s->img); continue; }
       s->len = len; s->fnv = fnv; s->w = w; s->h = h;
       NSPR++;
     }
-  fclose(f);
+  free(txt);
 }
 
 /* fit  screen = a*hd + b  per channel between the on-screen (tinted) low-res

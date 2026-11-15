@@ -44,15 +44,22 @@ Without a pack the core behaves like plain Opera.
 
 ## Installing a pack (Sewer Shark)
 
-The core looks for the Sewer Shark pack in this order:
+A pack is a single file, `SewerSharkHD.3dov`. Put it in RetroArch's
+**System** folder (next to the BIOS) and load the game as usual.
 
-1. A folder named `SewerSharkHD` in RetroArch's **System** folder.
-2. A text file `SewerSharkHD.txt` in the System folder whose first line is the
-   full path to the pack folder.
-3. A folder named `SewerSharkHD` next to the game file.
+The pack is encrypted with a key read from your own game disc, so it only
+opens together with the game. CUE/BIN and ISO dumps both work, as
+long as it is the same disc. If the pack does not match the disc, the core
+logs a warning and runs the game with its original video.
 
-The pack folder holds `index.bin`, `scale.txt`, an `art` folder, a `sprites`
-folder and one folder per video sequence.
+The core looks for a pack in this order:
+
+1. `SewerSharkHD.txt` in the System folder whose first line is the full path
+   to a pack file (or to an unpacked pack folder).
+2. `SewerSharkHD.3dov` in the System folder.
+3. A folder named `SewerSharkHD` in the System folder (an unpacked pack, used
+   while building one).
+4. `SewerSharkHD.3dov`, or a `SewerSharkHD` folder, next to the game file.
 
 ## Core options
 

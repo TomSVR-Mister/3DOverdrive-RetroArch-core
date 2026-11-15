@@ -369,6 +369,31 @@ print_cdimage_open_fail(const char *path_)
   return -1;
 }
 
+/*
+  Key for enhanced packs: FNV-1a over the user data of sectors 0-15 and
+  100000-100015 of the game disc, so a pack only opens with the disc it was
+  made for (any dump format: the core reads the same 2048-byte sectors).
+*/
+static
+uint64_t
+disc_key(void)
+{
+  static const uint32_t start[2] = { 0, 100000 };
+  uint8_t buf[CDIMAGE_SECTOR_SIZE];
+  uint64_t h = 0xcbf29ce484222325ULL;
+  int r, i, j;
+
+  for(r = 0; r < 2; r++)
+    for(i = 0; i < 16; i++)
+      {
+        memset(buf,0,sizeof(buf));
+        retro_cdimage_read_sector(&CDIMAGE,start[r] + i,buf,sizeof(buf));
+        for(j = 0; j < CDIMAGE_SECTOR_SIZE; j++)
+          { h ^= buf[j]; h *= 0x100000001b3ULL; }
+      }
+  return h;
+}
+
 static
 int
 open_cdimage_if_needed(const struct retro_game_info *info_)
@@ -506,15 +531,16 @@ retro_load_game(const struct retro_game_info *info_)
   content_runtime_reset();
   game_info_path_save(info_);
 
-  {
-    const char *sysdir = NULL;
-    retro_environment_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,&sysdir);
-    hd_sewer_init(sysdir,info_ ? info_->path : NULL);
-  }
-
   rv = open_cdimage_if_needed(info_);
   if(rv == -1)
     return false;
+
+  {
+    const char *sysdir = NULL;
+    retro_environment_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,&sysdir);
+    hd_sewer_set_disc_key(info_ ? disc_key() : 0);
+    hd_sewer_init(sysdir,info_ ? info_->path : NULL);
+  }
 
   ode_root_set_for_content(info_);
   if(!_init_core())
