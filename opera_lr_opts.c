@@ -1,3 +1,4 @@
+#include "hd_sewer.h"
 /*
   ISC License
 
@@ -573,6 +574,11 @@ opera_lr_opts_get_vdlp_pixel_format(opera_lr_opts_t *opts_)
       opts_->vdlp_pixel_format = VDLP_PIXEL_FORMAT_0RGB1555;
       opts_->video_pitch_shift = 1;
     }
+  if(hd_sewer_active())
+    {
+      opts_->vdlp_pixel_format = VDLP_PIXEL_FORMAT_XRGB8888;
+      opts_->video_pitch_shift = 2;
+    }
 }
 
 static
@@ -615,6 +621,8 @@ void
 opera_lr_opts_get_high_resolution(opera_lr_opts_t *opts_)
 {
   opts_->high_resolution = getval_is_enabled("high_resolution",false);
+  if(hd_sewer_active())
+    opts_->high_resolution = true;
 }
 
 static
@@ -834,6 +842,16 @@ opera_lr_opts_process()
   old_opts = g_OPTS;
 
   opera_lr_opts_get(&opts);
+  hd_sewer_set_opts(!getval_is_str("enh_cutscenes","original",false),
+                    !getval_is_str("enh_gameplay","original",false),
+                    !getval_is_str("enh_graphics","original",false),
+                    getval_is_str("enh_grain","light",false) ? 1 :
+                    getval_is_str("enh_grain","medium",false) ? 2 : 0);
+  hd_sewer_set_autosteer(getval_is_str("enh_autosteer","enabled",false));
+  hd_sewer_set_autoflare(getval_is_str("enh_autoflare","enabled",false));
+  hd_sewer_set_aimassist(getval_is_str("enh_aimassist","enabled",false));
+  hd_sewer_set_autofire(getval_is_str("enh_autofire","enabled",false));
+  hd_sewer_set_infenergy(getval_is_str("enh_infenergy","enabled",false));
   if(!opera_lr_opts_set(&opts))
     return OPERA_LR_OPTS_CHANGE_ERROR;
 

@@ -20,6 +20,8 @@ bool      HIRESMODE       = false;
 uint8_t  *DRAM            = NULL;
 uint32_t  DRAM_SIZE       = (DEFAULT_DRAM_SIZE);
 uint8_t  *VRAM            = NULL;
+uint8_t   HDMASK[MAX_VRAM_SIZE/2];
+uint8_t   HDM_MADAM_VAL = 1;
 uint32_t  VRAM_SIZE       = (DEFAULT_VRAM_SIZE);
 uint32_t  VRAM_SIZE_MASK  = (DEFAULT_VRAM_SIZE - 1);
 uint32_t  HIRES_VRAM_SIZE = (DEFAULT_HIRES_VRAM_SIZE);

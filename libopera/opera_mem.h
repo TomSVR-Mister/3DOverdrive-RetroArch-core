@@ -32,6 +32,9 @@ extern uint8_t *VRAM;
 extern uint32_t VRAM_SIZE;
 extern uint32_t VRAM_SIZE_MASK;
 extern uint32_t HIRES_VRAM_SIZE;
+extern uint8_t HDMASK[];
+extern uint8_t HDM_MADAM_VAL;
+#define HDM_SET(a_,v_) do{ if((a_) >= DRAM_SIZE) HDMASK[(((a_) - DRAM_SIZE) & (VRAM_SIZE - 1)) >> 1] = (v_); }while(0)
 
 extern uint8_t *NVRAM;
 #define NVRAM_SIZE      (ONE_KB * 32)
@@ -133,6 +136,7 @@ opera_mem_write8(uint32_t const addr_,
 #endif
 
   DRAM[addr] = val_;
+  HDM_SET(addr,0);
   if(!HIRESMODE || (addr < DRAM_SIZE))
     return;
   DRAM[addr + 1*VRAM_SIZE] =
@@ -153,6 +157,7 @@ opera_mem_write16_base(uint32_t const addr_,
 #endif
 
   *((uint16_t*)&DRAM[addr]) = val_;
+  HDM_SET(addr,HDM_MADAM_VAL);
 }
 
 static
@@ -168,6 +173,7 @@ opera_mem_write16(uint32_t const addr_,
 #endif
 
   *((uint16_t*)&DRAM[addr]) = val_;
+  HDM_SET(addr,HDM_MADAM_VAL);
   if(!HIRESMODE || (addr < DRAM_SIZE))
     return;
   *((uint16_t*)&DRAM[addr + 1*VRAM_SIZE]) =
@@ -182,6 +188,7 @@ opera_mem_write32(uint32_t const addr_,
                   uint32_t const val_)
 {
   *((uint32_t*)&DRAM[addr_]) = val_;
+  HDM_SET(addr_,0); HDM_SET(addr_+2,0);
   if(!HIRESMODE || (addr_ < DRAM_SIZE))
     return;
   *((uint32_t*)&DRAM[addr_ + 1*VRAM_SIZE]) =

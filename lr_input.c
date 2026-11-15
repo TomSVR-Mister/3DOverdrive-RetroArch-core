@@ -1,4 +1,5 @@
 #include "lr_input.h"
+#include "hd_sewer.h"
 #include "lr_input_crosshair.h"
 
 #include "opera_lr_callbacks.h"
@@ -94,6 +95,33 @@ lr_input_poll_joypad(const int port_)
   jp.a  = poll_joypad(port_,RETRO_DEVICE_ID_JOYPAD_Y);
   jp.b  = poll_joypad(port_,RETRO_DEVICE_ID_JOYPAD_B);
   jp.c  = poll_joypad(port_,RETRO_DEVICE_ID_JOYPAD_A);
+
+  if(port_ == 0)
+    {
+      int u = jp.u, d = jp.d, l = jp.l, r = jp.r;
+      jp.b = hd_sewer_turn_filter(jp.b,&u,&d,&l,&r);
+      { int b = jp.b; hd_sewer_autosteer(&b,&u,&d,&l,&r); jp.b = b; }
+      jp.u = u; jp.d = d; jp.l = l; jp.r = r;
+      hd_sewer_log_input(jp.b,u,d,l,r);
+      if(hd_sewer_autoflare()) jp.c = 1;
+      if(hd_sewer_autofire()) jp.a = 1;
+    }
+
+  /* diagnostic: log what the core receives whenever it changes */
+  {
+    static uint32_t last[8] = {0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF};
+    uint32_t cur = (jp.u<<0)|(jp.d<<1)|(jp.l<<2)|(jp.r<<3)|(jp.a<<4)|(jp.b<<5)|(jp.c<<6)|(jp.p<<7)|(jp.x<<8)|(jp.lt<<9)|(jp.rt<<10);
+    if(port_ >= 0 && port_ < 8 && cur != last[port_] && retro_log_printf_cb)
+      {
+        int16_t lx = retro_input_state_cb(port_,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT,RETRO_DEVICE_ID_ANALOG_X);
+        int16_t ly = retro_input_state_cb(port_,RETRO_DEVICE_ANALOG,RETRO_DEVICE_INDEX_ANALOG_LEFT,RETRO_DEVICE_ID_ANALOG_Y);
+        retro_log_printf_cb(RETRO_LOG_INFO,"[SSHD-INPUT] port %d:%s%s%s%s%s%s%s%s%s%s%s  stick %d,%d\n",port_,
+                            jp.u?" UP":"",jp.d?" DOWN":"",jp.l?" LEFT":"",jp.r?" RIGHT":"",
+                            jp.a?" A(fire)":"",jp.b?" B(turn)":"",jp.c?" C":"",jp.p?" P(start)":"",jp.x?" X(stop)":"",
+                            jp.lt?" LS":"",jp.rt?" RS":"",lx,ly);
+        last[port_] = cur;
+      }
+  }
 
   opera_pbus_add_joypad(&jp);
 }
@@ -282,6 +310,8 @@ lr_input_device_set(const uint32_t port_,
     return;
 
   PBUS_DEVICES[port_] = device_;
+  if(retro_log_printf_cb)
+    retro_log_printf_cb(RETRO_LOG_INFO,"[SSHD-INPUT] port %u device set to 0x%X\n",port_,device_);
 }
 
 uint32_t

@@ -75,6 +75,7 @@ sport_set_color(const uint32_t idx_)
 
   for(i = 0; i < SPORT_ELEM_COUNT; i++)
     vram[i] = SPORT.color;
+  if(idx_ < VRAM_SIZE) memset(&HDMASK[idx_>>1],0,SPORT_BUFSIZE>>1);
 }
 
 static
@@ -88,6 +89,7 @@ sport_set_color_with_mask(const uint32_t idx_,
 
   for(i = 0; i < SPORT_ELEM_COUNT; i++)
     vram[i] = ((vram[i] & ~mask_) | (SPORT.color & mask_));
+  if(idx_ < VRAM_SIZE) memset(&HDMASK[idx_>>1],0,SPORT_BUFSIZE>>1);
 }
 
 static
@@ -97,6 +99,7 @@ sport_memcpy(const uint32_t didx_,
              const uint32_t sidx_)
 {
   memcpy(&VRAM[didx_],&VRAM[sidx_],SPORT_BUFSIZE);
+  if(didx_ < VRAM_SIZE) memmove(&HDMASK[didx_>>1],&HDMASK[(sidx_ & (VRAM_SIZE-1))>>1],SPORT_BUFSIZE>>1);
 }
 
 static

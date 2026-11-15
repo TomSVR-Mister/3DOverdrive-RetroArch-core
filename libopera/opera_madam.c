@@ -754,6 +754,39 @@ static uint32_t  PXOR2;
 
 static uint32_t const BPP[8] = {1,1,2,4,6,8,16,1};
 
+/* ---- HD sprite substitution (used by Sewer Shark HD) ----------------------
+   When a cel being drawn is found in the HD sprite pack, every pixel it covers
+   in the hi-res planes takes its colour from the HD image at the matching
+   spot (inverse of the cel's position/scale), then goes through the normal
+   PPROC blending - so translucency, scaling and movement behave as before. */
+typedef const uint8_t *(*opera_hd_lookup_fn)(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, uint32_t flags_, int *w_, int *h_);
+opera_hd_lookup_fn opera_hd_cel_lookup = NULL;
+static const uint8_t *HDS = NULL;
+static int    HDS_W, HDS_H;
+static double HDS_X0, HDS_Y0, HDS_A, HDS_B, HDS_C, HDS_D;
+
+static INLINE const uint8_t*
+hd_sample(double px_, double py_)
+{
+  double dx = px_ - HDS_X0, dy = py_ - HDS_Y0;
+  double u  = dx * HDS_A + dy * HDS_B;
+  double v  = dx * HDS_C + dy * HDS_D;
+  int iu = (int)floor(u * 2.0), iv = (int)floor(v * 2.0);
+  if(iu < 0 || iv < 0 || iu >= HDS_W || iv >= HDS_H)
+    return NULL;
+  return &HDS[((size_t)iv * HDS_W + iu) * 4];
+}
+
+static INLINE uint16_t
+hd_curpix(uint16_t curpix_, const uint8_t *s_)
+{
+  return (uint16_t)((curpix_ & 0x8000) | ((s_[0] >> 3) << 10) | ((s_[1] >> 3) << 5) | (s_[2] >> 3));
+}
+
+static void hd_write4(int32_t x_, int32_t y_, uint16_t curpix_, uint16_t lamv_);
+static void hd_writehi(int32_t x_, int32_t y_, uint16_t curpix_, uint16_t lamv_);
+
+
 static uint8_t PSCALAR[8][4][32];
 
 static uint16_t MAPu8b[256+64];
@@ -1390,12 +1423,41 @@ opera_madam_cel_handle(void)
       if(flag_is_set(CCBFLAGS,CCB_SKIP))
         continue;
 
+      HDS = NULL;
+      HDM_MADAM_VAL = 1;
+      if(HIRESMODE && opera_hd_cel_lookup && !HDDX1616 && !HDDY1616)
+        {
+          int w2 = 0, h2 = 0;
+          const uint8_t *img = opera_hd_cel_lookup(PDATA,PRE0,PRE1,CCBFLAGS,&w2,&h2);
+          if(img == (const uint8_t*)1)
+            {
+              /* a copy of a video frame (e.g. the pause screen): let the video swap treat it as video */
+              HDM_MADAM_VAL = 0;
+            }
+          else if(img)
+            {
+              double hx = HDX1616 / 65536.0, hy = HDY1616 / 65536.0;
+              double vx = VDX1616 / 65536.0, vy = VDY1616 / 65536.0;
+              double det = hx * vy - hy * vx;
+              if(fabs(det) > 1e-6)
+                {
+                  HDS = img; HDS_W = w2; HDS_H = h2;
+                  HDS_X0 = XPOS1616 / 65536.0; HDS_Y0 = YPOS1616 / 65536.0;
+                  HDS_A =  vy / det; HDS_B = -vx / det;
+                  HDS_C = -hy / det; HDS_D =  hx / det;
+                }
+            }
+        }
+
       if(flag_is_set(CCBFLAGS,CCB_PACKED))
         DrawPackedCel();
       else if(flag_is_set(PRE1,PRE1_LRFORM) && (BPP[PRE0 & PRE0_BPP_MASK] == 16))
         DrawLRCel();
       else
         DrawLiteralCel();
+
+      HDS = NULL;
+      HDM_MADAM_VAL = 1;
     }
 
   clr_flag(STATBITS,SPRON);
@@ -1977,6 +2039,13 @@ process_pixel(int32_t x_,
 {
   int32_t p;
   int32_t fp;
+
+  if(HDS)
+    {
+      hd_write4(x_,y_,curpix_,lawv_);
+      g_CEL_PIXELS_DRAWN++;
+      return;
+    }
 
   fp = opera_mem_read16(REGCTL2 + XY2OFF(x_,y_,MADAM.rmod));
   p  = PPROC(curpix_,fp,lawv_);
@@ -2753,6 +2822,33 @@ DrawLRCel(void)
 
           for(j = TEXTURE_WI_START; j < SPRWI; j++)
             {
+              /* hi-res: a frame-buffer to frame-buffer copy must carry all four
+                 sub-pixel planes (and the "drawn by" mask) or HD detail is lost */
+              if(HIRESMODE && (PDATA >= DRAM_SIZE))
+                {
+                  uint32_t srca = PDATA + XY2OFF(j,i,offset << 2);
+                  uint32_t pl;
+                  uint8_t  keep = HDM_MADAM_VAL;
+                  HDM_MADAM_VAL = HDMASK[((srca - DRAM_SIZE) & (VRAM_SIZE - 1)) >> 1];
+                  for(pl = 0; pl < 4; pl++)
+                    {
+                      uint32_t po = pl * VRAM_SIZE;
+                      CURPIX = PDEC(opera_mem_read16(srca + po),&LAMV);
+                      if(!pproj.Transparent)
+                        {
+                          uint32_t fp = opera_mem_read16(REGCTL2 + XY2OFF(xcur >> 16,ycur >> 16,MADAM.rmod) + po);
+                          uint32_t px = PPROC(CURPIX,fp,LAMV);
+                          px = PPROJ_OUTPUT(px,fp);
+                          opera_mem_write16_base(REGCTL3 + XY2OFF(xcur >> 16,ycur >> 16,MADAM.wmod) + po,px);
+                        }
+                    }
+                  HDM_MADAM_VAL = keep;
+                  g_CEL_PIXELS_DRAWN++;
+                  xcur += HDX1616;
+                  ycur += HDY1616;
+                  continue;
+                }
+
               CURPIX = PDEC(opera_mem_read16((PDATA + XY2OFF(j,i,offset << 2))),&LAMV);
 
               if(!pproj.Transparent)
@@ -3244,6 +3340,12 @@ TexelDrawLine(uint16_t CURPIX_,
     {
       uint32_t next;
 
+      if(HDS)
+        {
+          hd_write4(xcur_,ycur_,CURPIX_,LAMV_);
+          continue;
+        }
+
       next = opera_mem_read16(REGCTL2 + XY2OFF(xcur_,ycur_,MADAM.rmod));
       if(next != curr)
         {
@@ -3297,6 +3399,47 @@ writePIX(int32_t  x_,
     }
 
   opera_mem_write16_base(src,p_);
+}
+
+
+static void
+hd_write4(int32_t  x_,
+          int32_t  y_,
+          uint16_t curpix_,
+          uint16_t lamv_)
+{
+  int sx, sy;
+  for(sy = 0; sy < 2; sy++)
+    for(sx = 0; sx < 2; sx++)
+      {
+        const uint8_t *s = hd_sample(x_ + (sx + 0.5) * 0.5,y_ + (sy + 0.5) * 0.5);
+        uint32_t plane = (((sy << 1) + sx) * VRAM_SIZE);
+        uint32_t dst;
+        uint16_t p;
+        if(!s || s[3] < 128)
+          continue;
+        dst = opera_mem_read16(REGCTL2 + XY2OFF(x_,y_,MADAM.rmod) + plane);
+        p   = PPROC(hd_curpix(curpix_,s),dst,lamv_);
+        p   = PPROJ_OUTPUT(p,dst);
+        opera_mem_write16_base(REGCTL3 + XY2OFF(x_,y_,MADAM.wmod) + plane,p);
+      }
+}
+
+static void
+hd_writehi(int32_t  x_,
+           int32_t  y_,
+           uint16_t curpix_,
+           uint16_t lamv_)
+{
+  const uint8_t *s = hd_sample((x_ + 0.5) * 0.5,(y_ + 0.5) * 0.5);
+  uint32_t dst;
+  uint16_t p;
+  if(!s || s[3] < 128)
+    return;
+  dst = readPIX(x_,y_);
+  p   = PPROC(hd_curpix(curpix_,s),dst,lamv_);
+  p   = PPROJ_OUTPUT(p,dst);
+  writePIX(x_,y_,p);
 }
 
 static
@@ -3518,6 +3661,10 @@ _rasterize_arbitrary(uint16_t curpix_,
 
                   for(; x < maxx; x++)
                     {
+                      if(HDS && hires_)
+                        hd_writehi(x,y,curpix_,lamv_);
+                      else
+                        {
                       next = readPIX(x,y);
                       if(next != curr)
                         {
@@ -3526,6 +3673,7 @@ _rasterize_arbitrary(uint16_t curpix_,
                           pixel = PPROJ_OUTPUT(pixel,next);
                         }
                       writePIX(x,y,pixel);
+                        }
                       if(flag_is_set(CCBFLAGS,CCB_MARIA))
                         return 0;
                     }
@@ -3556,6 +3704,10 @@ _rasterize_arbitrary(uint16_t curpix_,
 
               for(; x < maxx; x++)
                 {
+                  if(HDS && hires_)
+                    hd_writehi(x,y,curpix_,lamv_);
+                  else
+                    {
                   next = readPIX(x,y);
                   if(next != curr)
                     {
@@ -3564,6 +3716,7 @@ _rasterize_arbitrary(uint16_t curpix_,
                       pixel = PPROJ_OUTPUT(pixel,next);
                     }
                   writePIX(x,y,pixel);
+                    }
                   if(flag_is_set(CCBFLAGS,CCB_MARIA))
                     return 0;
                 }

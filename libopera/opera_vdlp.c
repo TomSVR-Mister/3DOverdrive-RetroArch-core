@@ -34,6 +34,7 @@ typedef void(*vdlp_renderer_t)();
 
 static vdlp_t               g_VDLP         = {0};
 static void                *g_BUF          = NULL;
+uint8_t HD_SCRMASK[384*288];
 static void                *g_CURBUF       = NULL;
 static vdlp_renderer_t      g_RENDERER     = NULL;
 static uint32_t             g_FLAGS        = VDLP_FLAG_NONE;
@@ -883,7 +884,17 @@ opera_vdlp_process_line(int line_)
     }
 
   if(visible_scanline(line_))
-    g_RENDERER();
+    {
+      int row = line_ - opera_region_start_scanline();
+      if(row >= 0 && row < 288)
+        {
+          uint32_t base = ((g_VDLP.curr_bmp ^ 2) & (VRAM_SIZE - 1));
+          int x;
+          for(x = 0; x < 384; x++)
+            HD_SCRMASK[row*384 + x] = HDMASK[((base + (x<<2)) & (VRAM_SIZE - 1)) >> 1];
+        }
+      g_RENDERER();
+    }
 
   g_VDLP.prev_bmp = ((g_VDLP.clut_ctrl.cdcw.prev_fba_tick) ?
                      tick_fba(g_VDLP.prev_bmp) : g_VDLP.curr_bmp);

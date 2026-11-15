@@ -33,6 +33,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "hd_sewer.h"
 #include <string.h>
 #include <time.h>
 
@@ -505,6 +506,12 @@ retro_load_game(const struct retro_game_info *info_)
   content_runtime_reset();
   game_info_path_save(info_);
 
+  {
+    const char *sysdir = NULL;
+    retro_environment_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,&sysdir);
+    hd_sewer_init(sysdir,info_ ? info_->path : NULL);
+  }
+
   rv = open_cdimage_if_needed(info_);
   if(rv == -1)
     return false;
@@ -542,6 +549,7 @@ retro_load_game_special(unsigned                      game_type_,
 void
 retro_unload_game(void)
 {
+  hd_sewer_deinit();
   opera_lr_nvram_save(game_info_path_get(),
                       g_OPTS.nvram_shared,
                       g_OPTS.nvram_version);
@@ -565,6 +573,14 @@ get_system_geometry(struct retro_game_geometry *geometry_)
   geometry_->max_width    = (opera_region_max_width()  * 2);
   geometry_->max_height   = (opera_region_max_height() * 2);
   geometry_->aspect_ratio = 4.0 / 3.0;
+  if(hd_sewer_scale() == 4)
+    {
+      /* 4x enhanced pack: frames are presented at 1280x960 */
+      geometry_->base_width  = 1280;
+      geometry_->base_height = 960;
+      if(geometry_->max_width  < 1280) geometry_->max_width  = 1280;
+      if(geometry_->max_height < 960)  geometry_->max_height = 960;
+    }
 }
 
 static
@@ -793,9 +809,12 @@ draw_crosshairs_if_enabled()
                            g_OPTS.video_height);
 }
 
+int opera_dbg_frame = 0;
+
 void
 retro_run(void)
 {
+  opera_dbg_frame++;
   if(!g_OPTS.initialized_opera)
     return;
 
@@ -805,6 +824,7 @@ retro_run(void)
   process_opts_if_updated();
 
   lr_input_update(g_OPTS.active_devices);
+  hd_sewer_aim(opera_dbg_frame);
 
   opera_3do_process_frame();
   if(ode_reset_if_requested())
@@ -814,8 +834,15 @@ retro_run(void)
 
   opera_lr_dsp_upload();
 
-  retro_video_refresh_cb(g_OPTS.video_buffer,
-                         g_OPTS.video_width,
-                         g_OPTS.video_height,
-                         g_OPTS.video_width << g_OPTS.video_pitch_shift);
+  if(g_OPTS.video_pitch_shift == 2)
+    {
+      int vw, vh;
+      const uint32_t *vb = hd_sewer_apply((uint32_t*)g_OPTS.video_buffer,g_OPTS.video_width,g_OPTS.video_height,opera_dbg_frame,&vw,&vh);
+      retro_video_refresh_cb(vb,vw,vh,vw * 4);
+    }
+  else
+    retro_video_refresh_cb(g_OPTS.video_buffer,
+                           g_OPTS.video_width,
+                           g_OPTS.video_height,
+                           g_OPTS.video_width << g_OPTS.video_pitch_shift);
 }

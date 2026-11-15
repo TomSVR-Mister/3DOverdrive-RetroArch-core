@@ -32,6 +32,7 @@ static struct retro_core_option_v2_category option_cats_us[] =
     { "audio",    "Audio",    NULL },
     { "input",    "Input",    NULL },
     { "advanced", "Advanced", NULL },
+    { "enhanced", "Enhanced FMV", "Settings for games with an enhanced video pack (currently Sewer Shark)." },
     { NULL, NULL, NULL },
   };
 
@@ -354,6 +355,133 @@ static struct retro_core_option_v2_definition option_defs_us_v2[] =
       },
       "disabled"
     },
+    {
+      "opera_enh_cutscenes",
+      "Cutscene Video",
+      NULL,
+      "Show the AI-restored version of story cutscenes, or the original 3DO video.",
+      NULL,
+      "enhanced",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_gameplay",
+      "Gameplay Video",
+      NULL,
+      "Show the AI-restored version of the tunnel video you fly through, or the original 3DO video.",
+      NULL,
+      "enhanced",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_graphics",
+      "Sprites and Artwork",
+      NULL,
+      "Use the redrawn creatures, explosions, HUD, cockpit and logos, or the original 3DO graphics.",
+      NULL,
+      "enhanced",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_grain",
+      "Film Grain",
+      NULL,
+      "Adds fine, moving film grain to enhanced video so AI-restored faces and surfaces look less smooth.",
+      NULL,
+      "enhanced",
+      {
+        { "off", "Off" },
+        { "light", "Light" },
+        { "medium", "Medium" },
+        { NULL, NULL },
+      },
+      "off"
+    },
+    {
+      "opera_enh_autosteer",
+      "Auto-Steer",
+      NULL,
+      "Automatically takes the tube jumps Catfish calls out and the open side of recharge stations. You still aim and shoot.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_autoflare",
+      "Auto-Flare",
+      NULL,
+      "Automatically fires hydrogen flares whenever the hydrogen gauge climbs, keeping it out of the danger zone.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_aimassist",
+      "Aim Assist",
+      NULL,
+      "Pulls the crosshair toward creatures in the tunnel. Moving the stick or d-pad overrides it. You still fire.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_autofire",
+      "Auto-Fire",
+      NULL,
+      "Fires automatically while the crosshair is on a creature. Every shot costs energy, so this saves energy compared to holding fire.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_infenergy",
+      "Infinite Energy (cheat)",
+      NULL,
+      "Keeps energy topped up, so creatures that latch on and drain energy can't end the game. For testing; turn off for a real game.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
     { NULL, NULL, NULL, NULL, NULL, NULL, {{0}}, NULL },
   };
 
@@ -623,6 +751,106 @@ static struct retro_core_option_definition option_defs_us[] =
       {
         { "disabled", NULL },
         { "enabled",  NULL },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_cutscenes",
+      "Enhanced FMV: Cutscene Video",
+      "Show the AI-restored version of story cutscenes, or the original 3DO video.",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_gameplay",
+      "Enhanced FMV: Gameplay Video",
+      "Show the AI-restored version of the tunnel video you fly through, or the original 3DO video.",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_graphics",
+      "Enhanced FMV: Sprites and Artwork",
+      "Use the redrawn creatures, explosions, HUD, cockpit and logos, or the original 3DO graphics.",
+      {
+        { "enhanced", "Enhanced" },
+        { "original", "Original" },
+        { NULL, NULL },
+      },
+      "enhanced"
+    },
+    {
+      "opera_enh_grain",
+      "Enhanced FMV: Film Grain",
+      "Adds fine, moving film grain to enhanced video so AI-restored faces and surfaces look less smooth.",
+      {
+        { "off", "Off" },
+        { "light", "Light" },
+        { "medium", "Medium" },
+        { NULL, NULL },
+      },
+      "off"
+    },
+    {
+      "opera_enh_autosteer",
+      "Enhanced FMV: Auto-Steer",
+      "Automatically takes the tube jumps Catfish calls out and the open side of recharge stations. You still aim and shoot.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_autoflare",
+      "Enhanced FMV: Auto-Flare",
+      "Automatically fires hydrogen flares whenever the hydrogen gauge climbs, keeping it out of the danger zone.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_aimassist",
+      "Enhanced FMV: Aim Assist",
+      "Pulls the crosshair toward creatures in the tunnel. Moving the stick or d-pad overrides it. You still fire.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_autofire",
+      "Enhanced FMV: Auto-Fire",
+      "Fires automatically while the crosshair is on a creature. Every shot costs energy, so this saves energy compared to holding fire.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_infenergy",
+      "Enhanced FMV: Infinite Energy (cheat)",
+      "Keeps energy topped up, so creatures that latch on and drain energy can't end the game. For testing; turn off for a real game.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
         { NULL, NULL },
       },
       "disabled"
