@@ -39,7 +39,7 @@ jobs:
         with: { name: windows-x64, path: 3doverdrive-windows-x64.zip }
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: make -j"$(sysctl -n hw.ncpu)" platform=osx ARCHFLAGS="-arch arm64 -arch x86_64"
