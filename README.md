@@ -1,47 +1,121 @@
-opera-libretro
-============
+# 3DOverdrive (RetroArch core)
 
-Opera is a fork of 4DO, originally a port of 4DO, itself a fork of
-FreeDO, to libretro. The fork/rename occurred due to the original 4DO
-project being dormant and to differenciate the project due to new
-development and focus.
+A RetroArch (libretro) core for playing 3DO full-motion-video games with
+**enhanced video packs**: AI-restored, higher-resolution replacements for the
+game's FMV, swapped in frame by frame while the original game runs.
 
-## ROMS
+3DOverdrive is built on [Opera](https://github.com/libretro/opera-libretro),
+the libretro 3DO emulator. Everything Opera does still works the same way.
+The core adds the enhanced-pack layer on top.
 
-| Filename                  | Hash                                 |
-| ------------------------- | ------------------------------------ |
-| opera-boot.bin            | Build-dependent (external ROM)       |
-| panafz1.bin               | md5:f47264dd47fe30f73ab3c010015c155b |
-| panafz1j.bin              | md5:a496cfdded3da562759be3561317b605 |
-| panafz1j-norsa.bin        | md5:f6c71de7470d16abe4f71b1444883dc8 |
-| panafz10.bin              | md5:51f2f43ae2f3508a14d9f56597e2d3ce |
-| panafz10-norsa.bin        | md5:1477bda80dc33731a65468c1f5bcbee9 |
-| panafz10e-anvil.bin       | md5:a48e6746bd7edec0f40cff078f0bb19f |
-| panafz10e-anvil-norsa.bin | md5:cf11bbb5a16d7af9875cca9de9a15e09 |
-| goldstar.bin              | md5:8639fd5e549bd6238cfee79e3e749114 |
-| sanyotry.bin              | md5:35fa1a1ebaaeea286dc5cd15487c13ea |
-| 3do_arcade_saot.bin       | md5:8970fc987ab89a7f64da9f8a8c4333ff |
+The first supported title is **Sewer Shark** (Digital Pictures, 1993).
 
-For certain Japanese games a second "Kanji" ROM is necessary.
+## Screenshots
 
-| Filename                   | Hash                                 |
-| -------------------------- | ------------------------------------ |
-| panafz1-kanji.bin          | md5:b8dc97f778a6245c58e064b0312e8281 |
-| panafz1j-kanji.bin         | md5:c23fb5d5e6bb1c240d02cf968972be37 |
-| panafz10ja-anvil-kanji.bin | md5:428577250f43edc902ea239c50d2240d |
+Original 3DO video on the left (scaled up), enhanced pack on the right.
 
+![Tunnel gameplay](docs/screenshots/tunnel.jpg)
+![Cutscene: the party](docs/screenshots/party.jpg)
+![Cutscene: the beach](docs/screenshots/beach.jpg)
 
-### opera-boot.bin
+## What the enhanced pack changes
 
-Opera includes **Opera Boot (Built-in)** as its first BIOS setting and default
-(`opera-boot-internal`). Its compressed ROM is embedded in the core, so no
-external BIOS file is required.
+- **Cutscenes and tunnel video:** every FMV frame is replaced by an
+  AI-restored version at 4x the original resolution (1280x960 output).
+- **Sprites and artwork:** creatures, explosions, the cockpit, HUD frames
+  and logos use redrawn high-resolution versions. Score and energy digits
+  stay original.
+- **Pause screen:** the paused game is redrawn from the enhanced video.
+- **Optional film grain** to take the "too smooth" look off restored faces.
 
-Supported BIOS ROMs placed in the RetroArch / libretro **System Directory**
-appear after the built-in option and can be selected normally. This includes
-`opera-boot.bin`, shown separately as **Opera Boot (System)**. "norsa" versions
-have the RSA encryption check disabled, allowing unsigned software to run.
+The game logic, timing, sound and controls are untouched. The core only
+changes what is drawn.
 
+## What you need
 
-More details about the opera-boot boot ROM can be found at:
-https://github.com/trapexit/opera-boot
+- RetroArch.
+- This core (see [Building](#building)), installed in RetroArch's `cores` folder.
+- A 3DO BIOS, as for Opera (see [README-Opera.md](README-Opera.md)).
+- Your own copy of the game.
+- An enhanced pack for the game. **Packs are not included in this
+  repository** and the game and BIOS are not distributed here.
+
+Without a pack the core behaves like plain Opera.
+
+## Installing a pack (Sewer Shark)
+
+The core looks for the Sewer Shark pack in this order:
+
+1. A folder named `SewerSharkHD` in RetroArch's **System** folder.
+2. A text file `SewerSharkHD.txt` in the System folder whose first line is the
+   full path to the pack folder.
+3. A folder named `SewerSharkHD` next to the game file.
+
+The pack folder holds `index.bin`, `scale.txt`, an `art` folder, a `sprites`
+folder and one folder per video sequence.
+
+## Core options
+
+Under **Quick Menu > Core Options > Enhanced FMV**:
+
+| Option | Values | Default |
+| --- | --- | --- |
+| Cutscene Video | Enhanced / Original | Enhanced |
+| Gameplay Video | Enhanced / Original | Enhanced |
+| Sprites and Artwork | Enhanced / Original | Enhanced |
+| Film Grain | Off / Light / Medium | Off |
+| Auto-Steer | Enabled / Disabled | Disabled |
+| Auto-Flare | Enabled / Disabled | Disabled |
+| Aim Assist | Enabled / Disabled | Disabled |
+| Auto-Fire | Enabled / Disabled | Disabled |
+| Infinite Energy (cheat) | Enabled / Disabled | Disabled |
+
+Cutscene and gameplay video can be switched separately, so you can, for
+example, keep the original tunnel footage and still watch restored cutscenes.
+
+The last five options are play aids, all off by default:
+
+- **Auto-Steer** takes the tube jumps you are told to take, and the open side
+  of recharge stations.
+- **Auto-Flare** fires hydrogen flares whenever the gas gauge climbs.
+- **Aim Assist** pulls the crosshair onto the creature filmed into the
+  current shot. Moving the stick or d-pad overrides it.
+- **Auto-Fire** shoots only while the crosshair is on that creature, which
+  saves energy.
+- **Infinite Energy** keeps energy from running out.
+
+## Save states and rewind
+
+Save states work as in Opera. Opera's core info file marks save states as
+"basic", so RetroArch turns rewind off for it. To use rewind, turn on
+**Settings > Core > Bypass Core Info Save States Features**
+(`core_info_savestate_bypass = "true"` in `retroarch.cfg`). This repository
+keeps Opera's info file unchanged.
+
+## Building
+
+Same as Opera:
+
+```sh
+make                      # Linux
+make platform=win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar   # Windows (MinGW cross-compile)
+```
+
+The output keeps Opera's file name (`opera_libretro.so` / `opera_libretro.dll`),
+so RetroArch shows it as Opera.
+
+## Third-party code
+
+- [Opera](https://github.com/libretro/opera-libretro) and its 4DO / FreeDO
+  heritage: see [LICENSE](LICENSE).
+- [libwebp](https://chromium.googlesource.com/webm/libwebp) decoder
+  (`deps/libwebp`): BSD license, see `deps/libwebp/COPYING`.
+- [stb_image](https://github.com/nothings/stb) (`stb_image.h`): public
+  domain / MIT.
+
+## License
+
+Same terms as Opera, including the FreeDO conditions on commercial use: see [LICENSE](LICENSE).
+
+Sewer Shark is a trademark of its respective owners. This project is not
+affiliated with or endorsed by them, and contains no game data.
