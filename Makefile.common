@@ -1,0 +1,145 @@
+ifeq ($(LIBRETRO_COMM_DIR),)
+	LIBRETRO_COMM_DIR := $(CORE_DIR)/libretro-common
+endif
+OPERA_DIR         := $(CORE_DIR)/libopera
+
+INCFLAGS := \
+         -I$(CORE_DIR) \
+         -I$(CORE_DIR)/libopera \
+         -I$(LIBRETRO_COMM_DIR)/include
+
+ifneq (,$(findstring msvc2003,$(platform)))
+INCFLAGS += -I$(LIBRETRO_COMM_DIR)/include/compat/msvc
+endif
+
+SOURCES_C := \
+	$(CORE_DIR)/cuefile.c \
+	$(CORE_DIR)/libretro.c \
+	$(CORE_DIR)/libretro_core_options.c \
+	$(CORE_DIR)/opera_lr_nvram.c \
+	$(CORE_DIR)/opera_lr_callbacks.c \
+        $(CORE_DIR)/opera_lr_opts.c \
+        $(CORE_DIR)/opera_lr_dsp.c \
+        $(CORE_DIR)/lr_input.c \
+        $(CORE_DIR)/lr_input_crosshair.c \
+        $(CORE_DIR)/lr_input_descs.c \
+        $(CORE_DIR)/retro_cdimage.c
+
+SOURCES_C += \
+        $(OPERA_DIR)/prng16.c \
+        $(OPERA_DIR)/prng32.c \
+        $(OPERA_DIR)/opera_3do.c \
+        $(OPERA_DIR)/opera_arm.c \
+        $(OPERA_DIR)/opera_bios.c \
+        $(OPERA_DIR)/opera_bitop.c \
+        $(OPERA_DIR)/opera_cdrom.c \
+        $(OPERA_DIR)/opera_clio.c \
+        $(OPERA_DIR)/opera_clock.c \
+        $(OPERA_DIR)/opera_diag_port.c \
+        $(OPERA_DIR)/opera_dsp.c \
+        $(OPERA_DIR)/opera_fixedpoint_math.c \
+        $(OPERA_DIR)/opera_log.c \
+        $(OPERA_DIR)/opera_madam.c \
+        $(OPERA_DIR)/opera_mem.c \
+        $(OPERA_DIR)/opera_nvram.c \
+        $(OPERA_DIR)/opera_pbus.c \
+        $(OPERA_DIR)/opera_region.c \
+        $(OPERA_DIR)/opera_sport.c \
+        $(OPERA_DIR)/opera_state.c \
+        $(OPERA_DIR)/opera_vdlp.c \
+        $(OPERA_DIR)/opera_xbus.c \
+        $(OPERA_DIR)/opera_xbus_cdrom_plugin.c
+
+ifeq ($(HAVE_LIBNX), 1)
+	SOURCES_C += \
+		$(LIBRETRO_COMM_DIR)/streams/interface_stream.c
+endif
+
+ifneq ($(STATIC_LINKING), 1)
+SOURCES_C += \
+	$(LIBRETRO_COMM_DIR)/streams/file_stream.c \
+	$(LIBRETRO_COMM_DIR)/streams/memory_stream.c \
+	$(LIBRETRO_COMM_DIR)/streams/interface_stream.c \
+	$(LIBRETRO_COMM_DIR)/encodings/encoding_utf.c \
+	$(LIBRETRO_COMM_DIR)/encodings/encoding_crc32.c \
+	$(LIBRETRO_COMM_DIR)/encodings/encoding_deflate.c \
+	$(LIBRETRO_COMM_DIR)/features/features_cpu.c \
+	$(LIBRETRO_COMM_DIR)/vfs/vfs_implementation.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_strcasestr.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_posix_string.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_snprintf.c \
+	$(LIBRETRO_COMM_DIR)/compat/fopen_utf8.c \
+	$(LIBRETRO_COMM_DIR)/string/stdstring.c \
+	$(LIBRETRO_COMM_DIR)/string/rstrtod.c \
+	$(LIBRETRO_COMM_DIR)/file/file_path.c \
+	$(LIBRETRO_COMM_DIR)/file/file_path_io.c \
+	$(LIBRETRO_COMM_DIR)/file/retro_dirent.c \
+	$(LIBRETRO_COMM_DIR)/lists/dir_list.c \
+	$(LIBRETRO_COMM_DIR)/lists/string_list.c \
+	$(LIBRETRO_COMM_DIR)/memmap/memalign.c \
+	$(LIBRETRO_COMM_DIR)/time/rtime.c
+
+ifeq ($(HAVE_CDROM), 1)
+	FLAGS += -DHAVE_CDROM
+
+ifeq ($(CDROM_DEBUG), 1)
+	FLAGS += -DCDROM_DEBUG
+endif
+
+SOURCES_C += \
+	$(LIBRETRO_COMM_DIR)/cdrom/cdrom.c \
+	$(LIBRETRO_COMM_DIR)/vfs/vfs_implementation_cdrom.c
+endif
+
+endif
+
+FLAGS += -DHAVE_STDINT_H -DHAVE_STDLIB_H
+
+ifeq (,$(findstring msvc,$(platform)))
+FLAGS += -DHAVE_SYS_PARAM_H
+FLAGS += -DINLINE="inline"
+else
+FLAGS += -DINLINE="_inline"
+endif
+
+ifeq ($(THREADED_DSP), 1)
+FLAGS += -DTHREADED_DSP -DHAVE_THREADS
+    ifneq ($(STATIC_LINKING), 1)
+    SOURCES_C += \
+            $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
+            $(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \
+            $(LIBRETRO_COMM_DIR)/queues/retro_spsc.c
+    endif
+endif
+
+ifeq ($(HAVE_CHD), 1)
+FLAGS += \
+	-DHAVE_CHD \
+	-DHAVE_RCHD \
+	-DHAVE_RCHD_DEFLATE \
+	-DHAVE_RCHD_LZMA \
+	-DHAVE_RCHD_FLAC \
+	-DHAVE_RCHD_ZSTD \
+	-DHAVE_RFLAC
+
+SOURCES_C += \
+        $(LIBRETRO_COMM_DIR)/streams/chd_stream.c \
+        $(LIBRETRO_COMM_DIR)/formats/chd/rchd.c \
+        $(LIBRETRO_COMM_DIR)/encodings/encoding_huffman.c \
+        $(LIBRETRO_COMM_DIR)/encodings/encoding_rzstd.c \
+        $(LIBRETRO_COMM_DIR)/encodings/encoding_xxh64.c \
+        $(LIBRETRO_COMM_DIR)/vfs/vfs_prefetch.c \
+        $(LIBRETRO_COMM_DIR)/formats/7z/r7z_lzma.c \
+        $(LIBRETRO_COMM_DIR)/formats/flac/rflac.c
+endif
+
+# The built-in boot ROM is inflated by rinflate, so a static build needs
+# it (and the CRC32/CPU-feature code it uses) with or without CHD.
+ifeq ($(STATIC_LINKING), 1)
+SOURCES_C += \
+        $(LIBRETRO_COMM_DIR)/encodings/encoding_crc32.c \
+        $(LIBRETRO_COMM_DIR)/encodings/encoding_deflate.c \
+        $(LIBRETRO_COMM_DIR)/features/features_cpu.c
+endif
+
