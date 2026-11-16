@@ -831,27 +831,38 @@ dist_cut(const float *a_, const float *w_, float n_, const uint8_t *b_, float cu
    blocks covered by something the game drew into the video do not count */
 #define TRIM 24
 static float
-dist_trim(const float *a_, const float *w_, const uint8_t *b_)
+dist_trim(const float *a_, const float *w_, const uint8_t *b_, float n_, float cut_)
 {
-  float top[TRIM], s = 0, n = 0;
-  int i, j, nt = 0;
+  /* n_ = number of weighted blocks; cut_ = stop once the distance must exceed it.
+     top[] holds the TRIM largest squared differences seen so far; the sum of
+     the others (kept in s) only grows, so it can end the search early. */
+  float top[TRIM], s = 0, lim;
+  int i, nt = 0, mi = 0;
+  if(n_ <= TRIM + 8) return 1e9f;
+  lim = cut_ * cut_ * (n_ - TRIM);
   for(i = 0; i < 96; i++)
     {
       float d;
       if(w_[i] <= 0) continue;
       d = a_[i] - (float)b_[i]; d *= d;
-      s += d; n += 1;
-      if(nt < TRIM) top[nt++] = d;
-      else
+      if(nt < TRIM)
         {
-          int mi = 0;
-          for(j = 1; j < TRIM; j++) if(top[j] < top[mi]) mi = j;
-          if(d > top[mi]) top[mi] = d;
+          top[nt] = d;
+          if(d < top[mi]) mi = nt;
+          nt++;
+          continue;
         }
+      if(d > top[mi])
+        {
+          int j;
+          s += top[mi]; top[mi] = d;
+          for(j = 0, mi = 0; j < TRIM; j++) if(top[j] < top[mi]) mi = j;
+        }
+      else
+        s += d;
+      if(s > lim) return 1e9f;
     }
-  if(n <= TRIM + 8) return 1e9f;
-  for(j = 0; j < nt; j++) s -= top[j];
-  return sqrtf(s / (n - nt));
+  return sqrtf(s / (n_ - TRIM));
 }
 
 static int
@@ -867,7 +878,7 @@ search(hd_win_t const *w_, const float *th_, const float *wt_, int prev_, int fu
       {
         float d;
         if(!same_track(prev_,c)) continue;
-        d = G->overlay ? dist_trim(th_,wt_,E[c].th) : dist(th_,wt_,E[c].th);
+        d = G->overlay ? dist_trim(th_,wt_,E[c].th,n,1e9f) : dist(th_,wt_,E[c].th);
         if(d < cd) { cd = d; cb = c; }
       }
   if(cb >= 0 && cd < 1.0f)
@@ -880,7 +891,7 @@ search(hd_win_t const *w_, const float *th_, const float *wt_, int prev_, int fu
       float d;
       if(E[i].w != w_->w || E[i].h != w_->h)
         continue;
-      d = G->overlay ? dist_trim(th_,wt_,E[i].th) : dist_cut(th_,wt_,n,E[i].th,bd);
+      d = G->overlay ? dist_trim(th_,wt_,E[i].th,n,bd) : dist_cut(th_,wt_,n,E[i].th,bd);
       if(d < bd) { bd = d; best = i; }
     }
   if(cb >= 0 && cd <= bd + 0.25f)
@@ -1346,7 +1357,8 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
       *ow_ = 1280; *oh_ = 960;
     }
 
-  for(k = 0; k < NWIN; k++)
+  /* nothing to swap while both video options are Original: skip the matching */
+  for(k = 0; k < NWIN && (OPT_CUT || OPT_GAME); k++)
     {
       hd_win_t const *w = &WINS[k];
       float th[96], wt[96], mean = 0, md = 0, d = 0, wsum = 0;
