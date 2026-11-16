@@ -300,11 +300,8 @@ load_file_img(const char *rel_, int *w_, int *h_)
   return img;
 }
 
-/* 1 for a test pack of the original 1x frames (scale.txt "1"): each frame is
-   doubled on load, so the rest of the module works as with a 2x pack */
-static int PACK1X = 0;
-
-/* load <rel>.webp, else <rel>.png, as RGBA */
+/* load <rel>.webp, else <rel>.png, as RGBA (the file's content decides the
+   decoder, not its extension) */
 static uint8_t*
 load_img(const char *rel_, int *w_, int *h_)
 {
@@ -316,23 +313,59 @@ load_img(const char *rel_, int *w_, int *h_)
       snprintf(p,sizeof(p),"%s.png",rel_);
       img = load_file_img(p,w_,h_);
     }
-  if(img && PACK1X)
-    {
-      int w = *w_, h = *h_, x, y;
-      uint32_t *d = (uint32_t*)malloc((size_t)w * h * 16);
-      const uint32_t *s = (const uint32_t*)img;
-      if(!d) { free(img); return NULL; }
-      for(y = 0; y < h; y++)
-        for(x = 0; x < w; x++)
-          {
-            uint32_t c = s[(size_t)y * w + x];
-            size_t o = (size_t)(2 * y) * (2 * w) + 2 * x;
-            d[o] = d[o + 1] = d[o + 2 * w] = d[o + 2 * w + 1] = c;
-          }
-      free(img);
-      img = (uint8_t*)d; *w_ = 2 * w; *h_ = 2 * h;
-    }
   return img;
+}
+
+/* Bring a pack frame to the pack's scale (canvas * SCALE). Packs normally
+   hold exactly that size and nothing happens. Test packs may mix sizes:
+   original 1x frames (doubled/quadrupled, nearest) and frames straight out
+   of Topaz at another size such as 5x (resampled, bilinear). */
+static uint8_t*
+fit_frame(uint8_t *img_, int *w_, int *h_, int cw_, int ch_)
+{
+  int sw = *w_, sh = *h_, tw = cw_ * SCALE, th = ch_ * SCALE, x, y;
+  const uint32_t *s = (const uint32_t*)img_;
+  uint32_t *d;
+  if(!img_ || cw_ <= 0 || ch_ <= 0 || (sw == tw && sh == th))
+    return img_;
+  d = (uint32_t*)malloc((size_t)tw * th * 4);
+  if(!d) { free(img_); return NULL; }
+  if(tw % sw == 0 && th % sh == 0)
+    {
+      int fx = tw / sw, fy = th / sh;
+      for(y = 0; y < th; y++)
+        for(x = 0; x < tw; x++)
+          d[(size_t)y * tw + x] = s[(size_t)(y / fy) * sw + x / fx];
+    }
+  else
+    {
+      for(y = 0; y < th; y++)
+        {
+          float fy = ((float)y + 0.5f) * sh / th - 0.5f;
+          int y0 = fy < 0 ? 0 : (int)fy, y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
+          float wy = fy - y0; if(wy < 0) wy = 0;
+          for(x = 0; x < tw; x++)
+            {
+              float fx = ((float)x + 0.5f) * sw / tw - 0.5f;
+              int x0 = fx < 0 ? 0 : (int)fx, x1 = x0 + 1 < sw ? x0 + 1 : sw - 1, k;
+              float wx = fx - x0;
+              uint32_t o = 0;
+              const uint8_t *p00, *p01, *p10, *p11;
+              if(wx < 0) wx = 0;
+              p00 = (const uint8_t*)&s[(size_t)y0 * sw + x0]; p01 = (const uint8_t*)&s[(size_t)y0 * sw + x1];
+              p10 = (const uint8_t*)&s[(size_t)y1 * sw + x0]; p11 = (const uint8_t*)&s[(size_t)y1 * sw + x1];
+              for(k = 0; k < 4; k++)
+                {
+                  float v = (p00[k] * (1 - wx) + p01[k] * wx) * (1 - wy) + (p10[k] * (1 - wx) + p11[k] * wx) * wy;
+                  o |= (uint32_t)(v + 0.5f) << (8 * k);
+                }
+              d[(size_t)y * tw + x] = o;
+            }
+        }
+    }
+  free(img_);
+  *w_ = tw; *h_ = th;
+  return (uint8_t*)d;
 }
 
 /* next line of a text buffer (modifies it); NULL at end */
@@ -592,8 +625,7 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
   {                                                  /* "4" for a 4x pack */
     size_t n = 0;
     char *t = (char*)pk_get("scale.txt",&n);
-    PACK1X = 0;
-    if(t) { if(atoi(t) == 4) SCALE = 4; else if(atoi(t) == 1) PACK1X = 1; free(t); }
+    if(t) { if(atoi(t) == 4) SCALE = 4; free(t); }   /* "1" (test pack of 1x frames) works as 2 */
   }
   if(SCALE == 2 && N > 0)
     {
@@ -653,7 +685,7 @@ pf_worker(void *arg_)
         continue;
 
       hd_path(i,path,sizeof(path));
-      p = load_img(path,&w,&h);
+      p = fit_frame(load_img(path,&w,&h),&w,&h,E[i].cw,E[i].ch);
       if(!p)
         continue;
       slock_lock(PF_LOCK);
@@ -754,7 +786,7 @@ hd_get(int i_, int *w_, int *h_)
   if(!p)
     {
       hd_path(i_,path,sizeof(path));
-      p = load_img(path,&w,&h);
+      p = fit_frame(load_img(path,&w,&h),&w,&h,E[i_].cw,E[i_].ch);
     }
   pf_request(i_);
   if(!p)
