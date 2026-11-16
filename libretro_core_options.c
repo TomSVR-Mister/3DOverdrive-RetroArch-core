@@ -32,7 +32,7 @@ static struct retro_core_option_v2_category option_cats_us[] =
     { "audio",    "Audio",    NULL },
     { "input",    "Input",    NULL },
     { "advanced", "Advanced", NULL },
-    { "enhanced", "Enhanced FMV", "Settings for games with an enhanced video pack (currently Sewer Shark)." },
+    { "enhanced", "Enhanced FMV", "Settings for games with an enhanced video pack (Sewer Shark, Supreme Warrior)." },
     { NULL, NULL, NULL },
   };
 
@@ -373,7 +373,7 @@ static struct retro_core_option_v2_definition option_defs_us_v2[] =
       "opera_enh_gameplay",
       "Gameplay Video",
       NULL,
-      "Show the AI-restored version of the tunnel video you fly through, or the original 3DO video.",
+      "Show the AI-restored version of gameplay video (Sewer Shark: the tunnels you fly through), or the original 3DO video.",
       NULL,
       "enhanced",
       {
@@ -769,7 +769,7 @@ static struct retro_core_option_definition option_defs_us[] =
     {
       "opera_enh_gameplay",
       "Enhanced FMV: Gameplay Video",
-      "Show the AI-restored version of the tunnel video you fly through, or the original 3DO video.",
+      "Show the AI-restored version of gameplay video (Sewer Shark: the tunnels you fly through), or the original 3DO video.",
       {
         { "enhanced", "Enhanced" },
         { "original", "Original" },

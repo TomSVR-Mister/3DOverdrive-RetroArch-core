@@ -547,6 +547,19 @@ retro_load_game(const struct retro_game_info *info_)
         hd_fmv_set_disc_key(info_ ? disc_key() : 0);
         hd_fmv_init(sysdir,info_ ? info_->path : NULL);
       }
+    {
+      /* Sewer Shark's play aids only show while Sewer Shark is running */
+      static const char *const AIDS[] =
+        { "opera_enh_autosteer","opera_enh_autoflare","opera_enh_aimassist",
+          "opera_enh_autofire","opera_enh_infenergy", NULL };
+      int i;
+      for(i = 0; AIDS[i]; i++)
+        {
+          struct retro_core_option_display d;
+          d.key = AIDS[i]; d.visible = hd_sewer_active() ? true : false;
+          retro_environment_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY,&d);
+        }
+    }
   }
 
   ode_root_set_for_content(info_);
