@@ -15,6 +15,7 @@ endif
 SOURCES_C := \
 	$(CORE_DIR)/cuefile.c \
 	$(CORE_DIR)/hd_sewer.c \
+	$(CORE_DIR)/hd_fmv.c \
 	$(wildcard $(CORE_DIR)/deps/libwebp/src/dec/*.c) \
 	$(wildcard $(CORE_DIR)/deps/libwebp/src/dsp/*.c) \
 	$(wildcard $(CORE_DIR)/deps/libwebp/src/utils/*.c) \

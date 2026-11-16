@@ -34,6 +34,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "hd_sewer.h"
+#include "hd_fmv.h"
 #include <string.h>
 #include <time.h>
 
@@ -540,6 +541,12 @@ retro_load_game(const struct retro_game_info *info_)
     retro_environment_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,&sysdir);
     hd_sewer_set_disc_key(info_ ? disc_key() : 0);
     hd_sewer_init(sysdir,info_ ? info_->path : NULL);
+    if(!hd_sewer_active())
+      {
+        /* other games: generic module (Sewer Shark keeps hd_sewer) */
+        hd_fmv_set_disc_key(info_ ? disc_key() : 0);
+        hd_fmv_init(sysdir,info_ ? info_->path : NULL);
+      }
   }
 
   ode_root_set_for_content(info_);
@@ -576,6 +583,7 @@ void
 retro_unload_game(void)
 {
   hd_sewer_deinit();
+  hd_fmv_deinit();
   opera_lr_nvram_save(game_info_path_get(),
                       g_OPTS.nvram_shared,
                       g_OPTS.nvram_version);
@@ -599,7 +607,7 @@ get_system_geometry(struct retro_game_geometry *geometry_)
   geometry_->max_width    = (opera_region_max_width()  * 2);
   geometry_->max_height   = (opera_region_max_height() * 2);
   geometry_->aspect_ratio = 4.0 / 3.0;
-  if(hd_sewer_scale() == 4)
+  if(hd_sewer_scale() == 4 || hd_fmv_scale() == 4)
     {
       /* 4x enhanced pack: frames are presented at 1280x960 */
       geometry_->base_width  = 1280;
@@ -863,7 +871,9 @@ retro_run(void)
   if(g_OPTS.video_pitch_shift == 2)
     {
       int vw, vh;
-      const uint32_t *vb = hd_sewer_apply((uint32_t*)g_OPTS.video_buffer,g_OPTS.video_width,g_OPTS.video_height,opera_dbg_frame,&vw,&vh);
+      const uint32_t *vb = hd_fmv_active() ?
+        hd_fmv_apply((uint32_t*)g_OPTS.video_buffer,g_OPTS.video_width,g_OPTS.video_height,opera_dbg_frame,&vw,&vh) :
+        hd_sewer_apply((uint32_t*)g_OPTS.video_buffer,g_OPTS.video_width,g_OPTS.video_height,opera_dbg_frame,&vw,&vh);
       retro_video_refresh_cb(vb,vw,vh,vw * 4);
     }
   else
