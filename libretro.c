@@ -559,6 +559,11 @@ retro_load_game(const struct retro_game_info *info_)
           d.key = AIDS[i]; d.visible = hd_sewer_active() ? true : false;
           retro_environment_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY,&d);
         }
+      {
+        struct retro_core_option_display d;
+        d.key = "opera_enh_autowin"; d.visible = hd_fmv_has_autowin() ? true : false;
+        retro_environment_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY,&d);
+      }
     }
   }
 
@@ -872,6 +877,7 @@ retro_run(void)
 
   lr_input_update(g_OPTS.active_devices);
   hd_sewer_aim(opera_dbg_frame);
+  hd_fmv_frame();
 
   opera_3do_process_frame();
   if(ode_reset_if_requested())

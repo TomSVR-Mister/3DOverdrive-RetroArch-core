@@ -76,6 +76,9 @@ typedef struct
                                        Matching then ignores the worst-fitting quarter of the
                                        thumbnail, and a pixel that differs from the matched
                                        frame by more than this value is kept as drawn. */
+  /* Auto-Win play aid for fighting games (0 = not available): health of the
+     player and the opponent in DRAM (int32 current, int32 maximum) */
+  uint32_t           hp_me, hp_me_max, hp_opp, hp_opp_max;
 } hd_game_t;
 
 /* Supreme Warrior (Digital Pictures, 1995, 2 discs). All video, cut scenes and
@@ -88,7 +91,8 @@ static const char *const SW_PLAY[]  = { NULL };   /* to fill in: fight sequences
 static const hd_game_t GAMES[] =
   {
     { "Supreme Warrior", SW_KEYS, "SUPREMEWARRIOR_HD", "SUPREMEWARRIOR_HD_LOG",
-      SW_PACKS, SW_WINS, 1, SW_PLAY, 0, 0, 40 },
+      SW_PACKS, SW_WINS, 1, SW_PLAY, 0, 0, 40,
+      0xA8228, 0xA822C, 0xA824C, 0xA8250 },
   };
 #define NGAMES ((int)(sizeof(GAMES)/sizeof(GAMES[0])))
 
@@ -360,6 +364,7 @@ static FILE *LOG = NULL;
 
 /* user options (core options, see opera_lr_opts.c) */
 static int OPT_CUT = 1, OPT_GAME = 1, OPT_GFX = 1, OPT_GRAIN = 0;
+static int OPT_AUTOWIN = 0;
 
 static const uint8_t *hd_get(int i_, int *w_, int *h_);
 static void pf_start(void);
@@ -1494,4 +1499,67 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
   if(OPT_GFX)
     art_apply(buf_,out,F);
   return out;
+}
+
+/*
+  Auto-Win (cheat, off by default) for fighting games such as Supreme Warrior.
+  Learned in the lab: emptying the opponent's health bar knocks him down; he
+  gets up and the fight goes on until he has been beaten enough times. So
+  every frame of a fight the player's health is kept full, the opponent's is
+  capped at 1 (the next hit that lands knocks him down; the cap leaves 0
+  alone so the game sees the knockdown), and while the player presses
+  nothing the core throws random direction + button moves.
+*/
+void
+hd_fmv_set_autowin(int on_)
+{
+  OPT_AUTOWIN = on_;
+}
+
+int
+hd_fmv_has_autowin(void)
+{
+  return ACTIVE && G && G->hp_me;
+}
+
+static int
+in_fight(void)
+{
+  return DRAM && *(const int32_t*)&DRAM[G->hp_opp_max] > 0 &&
+         *(const int32_t*)&DRAM[G->hp_me_max] > 0;
+}
+
+void
+hd_fmv_frame(void)
+{
+  int32_t *me, *opp;
+  if(!OPT_AUTOWIN || !hd_fmv_has_autowin() || !in_fight())
+    return;
+  me  = (int32_t*)&DRAM[G->hp_me];
+  opp = (int32_t*)&DRAM[G->hp_opp];
+  *me = *(const int32_t*)&DRAM[G->hp_me_max];
+  if(*opp > 1) *opp = 1;
+}
+
+void
+hd_fmv_autofight(int *a_, int *b_, int *c_, int *u_, int *d_, int *l_, int *r_)
+{
+  static uint32_t seed = 12345, n = 0, cur = 0;
+  if(!OPT_AUTOWIN || !hd_fmv_has_autowin() || !in_fight())
+    { n = 0; return; }
+  if(*a_ || *b_ || *c_ || *u_ || *d_ || *l_ || *r_)
+    { n = 0; return; }                      /* the player is playing: leave it */
+  /* one move every 20 polls, held for 6: a direction plus A, B or C */
+  if(n % 20 == 0)
+    {
+      seed = seed * 1103515245u + 12345u;
+      cur = (seed >> 16) % 12;
+    }
+  if(n % 20 < 6)
+    {
+      int dir = (int)(cur / 3), btn = (int)(cur % 3);
+      if(dir == 0) *u_ = 1; else if(dir == 1) *d_ = 1; else if(dir == 2) *l_ = 1; else *r_ = 1;
+      if(btn == 0) *a_ = 1; else if(btn == 1) *b_ = 1; else *c_ = 1;
+    }
+  n++;
 }

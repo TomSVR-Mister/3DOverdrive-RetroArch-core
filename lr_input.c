@@ -1,5 +1,6 @@
 #include "lr_input.h"
 #include "hd_sewer.h"
+#include "hd_fmv.h"
 #include "lr_input_crosshair.h"
 
 #include "opera_lr_callbacks.h"
@@ -105,6 +106,11 @@ lr_input_poll_joypad(const int port_)
       hd_sewer_log_input(jp.b,u,d,l,r);
       if(hd_sewer_autoflare()) jp.c = 1;
       if(hd_sewer_autofire()) jp.a = 1;
+      {
+        int a = jp.a, b = jp.b, c = jp.c, u2 = jp.u, d2 = jp.d, l2 = jp.l, r2 = jp.r;
+        hd_fmv_autofight(&a,&b,&c,&u2,&d2,&l2,&r2);
+        jp.a = a; jp.b = b; jp.c = c; jp.u = u2; jp.d = d2; jp.l = l2; jp.r = r2;
+      }
     }
 
   /* diagnostic: log what the core receives whenever it changes */

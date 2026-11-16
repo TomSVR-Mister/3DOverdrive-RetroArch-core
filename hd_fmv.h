@@ -10,4 +10,9 @@ const uint32_t *hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_
 int  hd_fmv_scale(void);
 int  hd_fmv_active(void);
 void hd_fmv_set_opts(int cutscenes_, int gameplay_, int graphics_, int grain_);
+/* Auto-Win play aid (fighting games): per frame, and on port 0 input */
+void hd_fmv_set_autowin(int on_);
+int  hd_fmv_has_autowin(void);
+void hd_fmv_frame(void);
+void hd_fmv_autofight(int *a_, int *b_, int *c_, int *u_, int *d_, int *l_, int *r_);
 #endif

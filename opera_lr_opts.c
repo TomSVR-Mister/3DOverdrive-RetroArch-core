@@ -853,6 +853,7 @@ opera_lr_opts_process()
                   !getval_is_str("enh_graphics","original",false),
                   getval_is_str("enh_grain","light",false) ? 1 :
                   getval_is_str("enh_grain","medium",false) ? 2 : 0);
+  hd_fmv_set_autowin(getval_is_str("enh_autowin","enabled",false));
   hd_sewer_set_autosteer(getval_is_str("enh_autosteer","enabled",false));
   hd_sewer_set_autoflare(getval_is_str("enh_autoflare","enabled",false));
   hd_sewer_set_aimassist(getval_is_str("enh_aimassist","enabled",false));

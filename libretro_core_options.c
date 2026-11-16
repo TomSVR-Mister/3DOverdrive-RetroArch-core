@@ -482,6 +482,20 @@ static struct retro_core_option_v2_definition option_defs_us_v2[] =
       },
       "disabled"
     },
+    {
+      "opera_enh_autowin",
+      "Auto-Win Fights (cheat)",
+      NULL,
+      "Fighting games (Supreme Warrior): keeps your health full, lets every hit that lands knock the opponent down, and fights for you while you press nothing. For testing; turn off for a real game.",
+      NULL,
+      "enhanced",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
     { NULL, NULL, NULL, NULL, NULL, NULL, {{0}}, NULL },
   };
 
@@ -848,6 +862,17 @@ static struct retro_core_option_definition option_defs_us[] =
       "opera_enh_infenergy",
       "Enhanced FMV: Infinite Energy (cheat)",
       "Keeps energy topped up, so creatures that latch on and drain energy can't end the game. For testing; turn off for a real game.",
+      {
+        { "enabled", "Enabled" },
+        { "disabled", "Disabled" },
+        { NULL, NULL },
+      },
+      "disabled"
+    },
+    {
+      "opera_enh_autowin",
+      "Enhanced FMV: Auto-Win Fights (cheat)",
+      "Fighting games (Supreme Warrior): keeps your health full, lets every hit that lands knock the opponent down, and fights for you while you press nothing. For testing; turn off for a real game.",
       {
         { "enabled", "Enabled" },
         { "disabled", "Disabled" },
