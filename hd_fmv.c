@@ -296,6 +296,10 @@ load_file_img(const char *rel_, int *w_, int *h_)
   return img;
 }
 
+/* 1 for a test pack of the original 1x frames (scale.txt "1"): each frame is
+   doubled on load, so the rest of the module works as with a 2x pack */
+static int PACK1X = 0;
+
 /* load <rel>.webp, else <rel>.png, as RGBA */
 static uint8_t*
 load_img(const char *rel_, int *w_, int *h_)
@@ -303,9 +307,28 @@ load_img(const char *rel_, int *w_, int *h_)
   char p[1400];
   uint8_t *img;
   snprintf(p,sizeof(p),"%s.webp",rel_);
-  if((img = load_file_img(p,w_,h_)) != NULL) return img;
-  snprintf(p,sizeof(p),"%s.png",rel_);
-  return load_file_img(p,w_,h_);
+  if((img = load_file_img(p,w_,h_)) == NULL)
+    {
+      snprintf(p,sizeof(p),"%s.png",rel_);
+      img = load_file_img(p,w_,h_);
+    }
+  if(img && PACK1X)
+    {
+      int w = *w_, h = *h_, x, y;
+      uint32_t *d = (uint32_t*)malloc((size_t)w * h * 16);
+      const uint32_t *s = (const uint32_t*)img;
+      if(!d) { free(img); return NULL; }
+      for(y = 0; y < h; y++)
+        for(x = 0; x < w; x++)
+          {
+            uint32_t c = s[(size_t)y * w + x];
+            size_t o = (size_t)(2 * y) * (2 * w) + 2 * x;
+            d[o] = d[o + 1] = d[o + 2 * w] = d[o + 2 * w + 1] = c;
+          }
+      free(img);
+      img = (uint8_t*)d; *w_ = 2 * w; *h_ = 2 * h;
+    }
+  return img;
 }
 
 /* next line of a text buffer (modifies it); NULL at end */
@@ -525,13 +548,30 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
     ok = try_root(env);
   /* 2-4: each pack name (one per disc) in the system folder, then next to the
      game; a pack made for another disc is skipped, so the right one wins */
-  for(k = 0; G->packs[k] && !ok; k++)
-    {
-      if(system_dir_)
-        ok = try_base(system_dir_,G->packs[k],1);
-      if(!ok && gdir[0])
-        ok = try_base(gdir,G->packs[k],0);
-    }
+  {
+    /* "Disc N" in the file name: try the pack ending in N first (unpacked
+       test folders have no disc check, so the order matters for them) */
+    char dd = 0;
+    int pass;
+    for(k = 1; k <= 9 && !dd; k++)
+      {
+        char key[8];
+        snprintf(key,sizeof(key),"disc %d",k);
+        if(ci_contains(game_path_,key)) dd = (char)('0' + k);
+      }
+    for(pass = 0; pass < 2 && !ok; pass++)
+      for(k = 0; G->packs[k] && !ok; k++)
+        {
+          const char *pn = G->packs[k];
+          int mine = dd && pn[0] && pn[strlen(pn) - 1] == dd;
+          if(pass == 0 ? !mine : mine)
+            continue;
+          if(system_dir_)
+            ok = try_base(system_dir_,pn,1);
+          if(!ok && gdir[0])
+            ok = try_base(gdir,pn,0);
+        }
+  }
   if(!ok)
     return;
   if(retro_log_printf_cb)
@@ -547,7 +587,8 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
   {                                                  /* "4" for a 4x pack */
     size_t n = 0;
     char *t = (char*)pk_get("scale.txt",&n);
-    if(t) { if(atoi(t) == 4) SCALE = 4; free(t); }
+    PACK1X = 0;
+    if(t) { if(atoi(t) == 4) SCALE = 4; else if(atoi(t) == 1) PACK1X = 1; free(t); }
   }
   if(SCALE == 2 && N > 0)
     {
