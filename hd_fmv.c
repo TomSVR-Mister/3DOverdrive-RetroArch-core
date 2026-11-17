@@ -71,6 +71,8 @@ typedef struct
   const char *const *gameplay_seq;  /* seq ids that count as gameplay video, else cut scene */
   uint32_t           pause_addr;    /* DRAM byte that is pause_val while paused; 0 = none */
   int                pause_val;
+  int                overlay_cel;   /* 1: smaller 16-bit frame-buffer cels from VRAM are
+                                       overlays drawn over the video (see hd_cel_lookup) */
   int                overlay;       /* >0: the game draws things into the video with the CPU
                                        (not MADAM), e.g. the player's hands in Supreme Warrior.
                                        Matching then ignores the worst-fitting quarter of the
@@ -93,7 +95,7 @@ static const char *const SW_PLAY[]  = { NULL };   /* to fill in: fight sequences
 static const hd_game_t GAMES[] =
   {
     { "Supreme Warrior", SW_KEYS, "SUPREMEWARRIOR_HD", "SUPREMEWARRIOR_HD_LOG",
-      SW_PACKS, SW_WINS, 1, SW_PLAY, 0, 0, 40,
+      SW_PACKS, SW_WINS, 1, SW_PLAY, 0, 0, 1, 0,
       { { 0xA8228, 0xA822C, 0xA824C, 0xA8250 },      /* disc 1 */
         { 0xA816C, 0xA8170, 0xA8190, 0xA8194 } } },  /* disc 2 */
   };
@@ -1166,6 +1168,10 @@ hd_cel_lookup(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, uint32_t flags_, 
       for(k = 0; k < NWIN; k++)
         if(WINS[k].w == w && WINS[k].h == h)
           return (const uint8_t*)1;
+      /* a smaller one from VRAM in frame-buffer form, drawn over the video
+         (Supreme Warrior's hands and legs): an overlay, keep it on top */
+      if(G && G->overlay_cel && pdata_ >= 0x200000 && (pre1_ & 0x800) && h < WINS[0].h)
+        return (const uint8_t*)2;
     }
   if(!NSPR || !OPT_GFX)
     return NULL;

@@ -761,6 +761,7 @@ static uint32_t const BPP[8] = {1,1,2,4,6,8,16,1};
    PPROC blending - so translucency, scaling and movement behave as before. */
 typedef const uint8_t *(*opera_hd_lookup_fn)(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, uint32_t flags_, int *w_, int *h_);
 opera_hd_lookup_fn opera_hd_cel_lookup = NULL;
+static int HDM_FORCE_MADAM = 0;   /* set while drawing a cel the lookup marked as an overlay */
 static const uint8_t *HDS = NULL;
 static int    HDS_W, HDS_H;
 static double HDS_X0, HDS_Y0, HDS_A, HDS_B, HDS_C, HDS_D;
@@ -1425,6 +1426,7 @@ opera_madam_cel_handle(void)
 
       HDS = NULL;
       HDM_MADAM_VAL = 1;
+      HDM_FORCE_MADAM = 0;
       if(HIRESMODE && opera_hd_cel_lookup && !HDDX1616 && !HDDY1616)
         {
           int w2 = 0, h2 = 0;
@@ -1433,6 +1435,12 @@ opera_madam_cel_handle(void)
             {
               /* a copy of a video frame (e.g. the pause screen): let the video swap treat it as video */
               HDM_MADAM_VAL = 0;
+            }
+          else if(img == (const uint8_t*)2)
+            {
+              /* drawn from a VRAM buffer the CPU filled, but it is an overlay
+                 over the video (Supreme Warrior's hands): count it as MADAM */
+              HDM_FORCE_MADAM = 1;
             }
           else if(img)
             {
@@ -2829,7 +2837,7 @@ DrawLRCel(void)
                   uint32_t srca = PDATA + XY2OFF(j,i,offset << 2);
                   uint32_t pl;
                   uint8_t  keep = HDM_MADAM_VAL;
-                  HDM_MADAM_VAL = HDMASK[((srca - DRAM_SIZE) & (VRAM_SIZE - 1)) >> 1];
+                  HDM_MADAM_VAL = HDM_FORCE_MADAM ? 1 : HDMASK[((srca - DRAM_SIZE) & (VRAM_SIZE - 1)) >> 1];
                   for(pl = 0; pl < 4; pl++)
                     {
                       uint32_t po = pl * VRAM_SIZE;
