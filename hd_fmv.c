@@ -76,9 +76,11 @@ typedef struct
                                        Matching then ignores the worst-fitting quarter of the
                                        thumbnail, and a pixel that differs from the matched
                                        frame by more than this value is kept as drawn. */
-  /* Auto-Win play aid for fighting games (0 = not available): health of the
-     player and the opponent in DRAM (int32 current, int32 maximum) */
-  uint32_t           hp_me, hp_me_max, hp_opp, hp_opp_max;
+  /* Auto-Win play aid for fighting games (0 = not available): per disc (the
+     order of packs[]), DRAM addresses of the player's health, its maximum,
+     the opponent's health and its maximum (int32 each). Each disc of
+     Supreme Warrior has its own program, so the addresses differ. */
+  uint32_t           hp[2][4];
 } hd_game_t;
 
 /* Supreme Warrior (Digital Pictures, 1995, 2 discs). All video, cut scenes and
@@ -92,11 +94,13 @@ static const hd_game_t GAMES[] =
   {
     { "Supreme Warrior", SW_KEYS, "SUPREMEWARRIOR_HD", "SUPREMEWARRIOR_HD_LOG",
       SW_PACKS, SW_WINS, 1, SW_PLAY, 0, 0, 40,
-      0xA8228, 0xA822C, 0xA824C, 0xA8250 },
+      { { 0xA8228, 0xA822C, 0xA824C, 0xA8250 },      /* disc 1 */
+        { 0xA816C, 0xA8170, 0xA8190, 0xA8194 } } },  /* disc 2 */
   };
 #define NGAMES ((int)(sizeof(GAMES)/sizeof(GAMES[0])))
 
 static const hd_game_t *G    = NULL;   /* active profile */
+static int              PACK_K = 0;     /* which of G->packs[] was loaded (= disc) */
 static const hd_win_t  *WINS = NULL;
 static int              NWIN = 0;
 
@@ -608,6 +612,7 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
             ok = try_base(system_dir_,pn,1);
           if(!ok && gdir[0])
             ok = try_base(gdir,pn,0);
+          if(ok) PACK_K = k;
         }
   }
   if(!ok)
@@ -1551,25 +1556,40 @@ hd_fmv_set_autowin(int on_)
 int
 hd_fmv_has_autowin(void)
 {
-  return ACTIVE && G && G->hp_me;
+  return ACTIVE && G && G->hp[0][0];
+}
+
+/* the health addresses for this disc, or NULL unless all four values look
+   like a fight in progress (so nothing is written anywhere else) */
+static const uint32_t*
+fight_hp(void)
+{
+  const uint32_t *a = G->hp[PACK_K < 2 ? PACK_K : 0];
+  int32_t me, mm, op, om;
+  if(!DRAM || !a[0]) return NULL;
+  me = *(const int32_t*)&DRAM[a[0]]; mm = *(const int32_t*)&DRAM[a[1]];
+  op = *(const int32_t*)&DRAM[a[2]]; om = *(const int32_t*)&DRAM[a[3]];
+  if(mm < 100 || mm > 2000 || om < 100 || om > 2000 || me < 0 || me > mm || op < 0 || op > om)
+    return NULL;
+  return a;
 }
 
 static int
 in_fight(void)
 {
-  return DRAM && *(const int32_t*)&DRAM[G->hp_opp_max] > 0 &&
-         *(const int32_t*)&DRAM[G->hp_me_max] > 0;
+  return fight_hp() != NULL;
 }
 
 void
 hd_fmv_frame(void)
 {
   int32_t *me, *opp;
-  if(!OPT_AUTOWIN || !hd_fmv_has_autowin() || !in_fight())
+  const uint32_t *a;
+  if(!OPT_AUTOWIN || !hd_fmv_has_autowin() || (a = fight_hp()) == NULL)
     return;
-  me  = (int32_t*)&DRAM[G->hp_me];
-  opp = (int32_t*)&DRAM[G->hp_opp];
-  *me = *(const int32_t*)&DRAM[G->hp_me_max];
+  me  = (int32_t*)&DRAM[a[0]];
+  opp = (int32_t*)&DRAM[a[2]];
+  *me = *(const int32_t*)&DRAM[a[1]];
   if(*opp > 1) *opp = 1;
 }
 
