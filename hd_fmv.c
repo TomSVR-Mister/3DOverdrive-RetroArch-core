@@ -446,6 +446,7 @@ grain_px(uint32_t c_, int n_)
   return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 static void art_load(void);
+static void hands_load(void);
 static const uint8_t *hd_get(int i_, int *w_, int *h_);
 static void spr_load(void);
 
@@ -628,6 +629,7 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
     LOG = fopen(getenv(G->env_log),"w");
   art_load();
   spr_load();
+  hands_load();
   SCALE = 2;
   {                                                  /* "4" for a 4x pack */
     size_t n = 0;
@@ -1234,6 +1236,282 @@ spr_load(void)
   free(txt);
 }
 
+/* ---- Enhanced overlay poses (Supreme Warrior's hands and legs) ------------
+   <pack>/hands/hands.txt: "<key> <w> <h> ..." per pose, with hands/<key>.png
+   (4x RGBA, smooth alpha) and hands/<key>_1x.png (the game's own pose).
+   key = FNV-1a 32 over the cel's 32-bit words, high byte first. MADAM reports
+   every overlay cel it draws (opera_hd_overlay_draw); at output time each
+   reported pose is drawn at 4x over the doubled 1x one, but only where the
+   1x pose is really still visible on screen (anything drawn over it wins).
+   Behind the pose's smooth edge goes the enhanced video, which the video
+   swap keeps in VID4 for the screen pixels the 1x pose covers. */
+typedef void (*opera_hd_overlay_fn)(uint32_t, uint32_t, uint32_t, int32_t, int32_t, int32_t, int32_t);
+extern opera_hd_overlay_fn opera_hd_overlay_draw;
+
+typedef struct { uint32_t key; int w, h; uint8_t *hd, *one; } hand_t;
+static hand_t *HAND = NULL;
+static int     NHAND = 0;
+typedef struct { int idx, x, y, mirror; } hand_draw_t;
+#define HD_MAXDRAW 16
+#define HD_HIST 4                        /* [0] = this frame; 1.. = last frames that drew a pose */
+static hand_draw_t HDRAW[HD_HIST][HD_MAXDRAW];
+static int         NHDRAW[HD_HIST] = {0,0,0,0};
+static uint32_t   *VID4 = NULL;          /* enhanced video under overlay pixels (1280x960) */
+static int        *VIDF = NULL;          /* per 1x pixel (384 wide): frame VID4 was written */
+
+static void
+hd_ov_draw(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, int32_t xpos_, int32_t ypos_, int32_t hdx_, int32_t vdy_)
+{
+  int w = (pre1_ & 0x7FF) + 1, rp = ((pre0_ >> 6) & 0x3FF) + 1;
+  uint32_t stride = ((pre1_ >> 16) & 0x3FF) + 2, h = 2166136261u;
+  int i, p, x, k;
+#ifdef SW_HANDDUMP
+  {
+    /* debug: write every distinct overlay cel once (rp row pairs = 2*rp lines) */
+    static uint32_t seen[4096]; static int nseen = 0;
+    const char *dir = getenv("SUPREMEWARRIOR_HANDDUMP");
+    if(dir && rp > 0 && w > 0 && rp * w <= 512 * 1024)
+      {
+        uint32_t fh = 2166136261u, *buf = (uint32_t*)malloc((size_t)rp * w * 4);
+        int n = 0, j;
+        if(buf)
+          {
+            for(p = 0; p < rp; p++)
+              for(x = 0; x < w; x++)
+                {
+                  uint32_t v = opera_mem_read32(pdata_ + 4 * (p * stride + x));
+                  buf[n++] = v;
+                  for(k = 24; k >= 0; k -= 8) fh = (fh ^ ((v >> k) & 0xFF)) * 16777619u;
+                }
+            for(j = 0; j < nseen; j++) if(seen[j] == fh) break;
+            if(j == nseen && nseen < 4096)
+              {
+                char fp[1400]; FILE *f;
+                seen[nseen++] = fh;
+                snprintf(fp,sizeof(fp),"%s\\%08x.raw",dir,fh);
+                if((f = fopen(fp,"wb")) != NULL) { fwrite(buf,4,(size_t)n,f); fclose(f); }
+                snprintf(fp,sizeof(fp),"%s\\index.txt",dir);
+                if((f = fopen(fp,"a")) != NULL)
+                  { fprintf(f,"%08x %d %d %d %d %d %d\n",fh,w,2 * rp,xpos_,ypos_,hdx_,vdy_); fclose(f); }
+              }
+            free(buf);
+          }
+      }
+  }
+#endif
+  if(!NHAND || NHDRAW[0] >= HD_MAXDRAW || vdy_ != 65536 || (hdx_ != 65536 && hdx_ != -65536))
+    return;
+  for(i = 0; i < NHAND; i++)
+    if(HAND[i].w == w && HAND[i].h == 2 * rp) break;
+  if(i == NHAND) return;
+  for(p = 0; p < rp; p++)
+    for(x = 0; x < w; x++)
+      {
+        uint32_t v = opera_mem_read32(pdata_ + 4 * (p * stride + x));
+        for(k = 24; k >= 0; k -= 8) h = (h ^ ((v >> k) & 0xFF)) * 16777619u;
+      }
+  for(i = 0; i < NHAND; i++)
+    if(HAND[i].key == h && HAND[i].w == w) break;
+  if(LOG) fprintf(LOG,"hand %08x w=%d rp=%d x=%d y=%d hdx=%d %s\n",h,w,rp,xpos_ >> 16,ypos_ >> 16,hdx_,i < NHAND ? "hit" : "miss");
+  if(i == NHAND) return;
+  HDRAW[0][NHDRAW[0]].idx = i;
+  HDRAW[0][NHDRAW[0]].x = xpos_ >> 16;
+  HDRAW[0][NHDRAW[0]].y = ypos_ >> 16;
+  HDRAW[0][NHDRAW[0]].mirror = hdx_ < 0;
+  NHDRAW[0]++;
+}
+
+static void
+hands_load0(void)
+{
+  char *txt, *cur, *ln, path[1400], key[32];
+  size_t tn = 0;
+  int i, w, h, w2, h2;
+  for(i = 0; i < NHAND; i++) { free(HAND[i].hd); free(HAND[i].one); }
+  free(HAND); HAND = NULL; NHAND = 0; memset(NHDRAW,0,sizeof(NHDRAW));
+  opera_hd_overlay_draw = NULL;
+  txt = (char*)pk_get("hands/hands.txt",&tn);
+  if(!txt) return;
+  HAND = (hand_t*)calloc(256,sizeof(hand_t));
+  cur = txt;
+  while(HAND && NHAND < 256 && (ln = next_line(&cur)) != NULL)
+    {
+      hand_t *s = &HAND[NHAND];
+      if(sscanf(ln,"%31s %d %d",key,&w,&h) != 3) continue;
+      s->key = (uint32_t)strtoul(key,NULL,16); s->w = w; s->h = h;
+      snprintf(path,sizeof(path),"hands/%s.png",key);
+      s->hd = load_file_img(path,&w2,&h2);
+      if(!s->hd || w2 != 4 * w || h2 != 4 * h) { free(s->hd); continue; }
+      snprintf(path,sizeof(path),"hands/%s_1x.png",key);
+      s->one = load_file_img(path,&w2,&h2);
+      if(!s->one || w2 != w || h2 != h) { free(s->hd); free(s->one); continue; }
+      NHAND++;
+    }
+  free(txt);
+  if(NHAND)
+    {
+      if(!VID4) VID4 = (uint32_t*)malloc(1280 * 960 * 4);
+      if(!VIDF) VIDF = (int*)calloc(384 * 288,sizeof(int));
+      if(VID4 && VIDF) opera_hd_overlay_draw = hd_ov_draw;
+    }
+  if(LOG) fprintf(LOG,"hands %d\n",NHAND);
+}
+
+static void
+hands_load(void)
+{
+#ifdef SW_HANDDUMP
+  /* debug: SUPREMEWARRIOR_HANDS=<dir> loads <dir>/hands/... instead of the pack's hands */
+  const char *ov = getenv("SUPREMEWARRIOR_HANDS");
+  if(ov)
+    {
+      static char saved[sizeof(ROOT)];
+      FILE *pk = PK;
+      memcpy(saved,ROOT,sizeof(ROOT));
+      snprintf(ROOT,sizeof(ROOT),"%s",ov); PK = NULL;
+      hands_load0();
+      memcpy(ROOT,saved,sizeof(ROOT)); PK = pk;
+      return;
+    }
+#endif
+  hands_load0();
+}
+
+static INLINE int
+c5near(uint32_t p_, const uint8_t *o_)
+{
+  int dr = (int)((p_ >> 19) & 31) - (o_[0] >> 3);
+  int dg = (int)((p_ >> 11) & 31) - (o_[1] >> 3);
+  int db = (int)((p_ >> 3) & 31) - (o_[2] >> 3);
+  return dr >= -1 && dr <= 1 && dg >= -1 && dg <= 1 && db >= -1 && db <= 1;
+}
+
+static int
+hand_vis(const hand_draw_t *d_, const uint32_t *buf_, int *opq_)
+{
+  const hand_t *P = &HAND[d_->idx];
+  int x0 = d_->mirror ? d_->x - P->w + 1 : d_->x, cx, cy, vis = 0;
+  for(cy = 0; cy < P->h; cy++)
+    for(cx = 0; cx < P->w; cx++)
+      {
+        int sx = x0 + cx, sy = d_->y + cy, ux = d_->mirror ? P->w - 1 - cx : cx;
+        const uint8_t *o = &P->one[(cy * P->w + ux) * 4];
+        if(!o[3] || sx < 0 || sy < 0 || sx >= 320 || sy >= 240) continue;
+        (*opq_)++;
+        vis += c5near(buf_[(size_t)(sy * 2) * 640 + sx * 2],o);
+      }
+  return vis;
+}
+
+/* no enhanced video stored under pose pixel sx,sy: the colour of the
+   nearest screen pixel (within 4) outside the pose that nothing else was
+   drawn on - enhanced video - so a soft 4x edge never blends over the
+   doubled 1x hand colour (staircase) */
+static uint32_t
+hand_bg(const uint32_t *out_, const hand_t *P, const hand_draw_t *d_, int x0_, int sx_, int sy_, int *ok_)
+{
+  int r, dx, dy;
+  for(r = 1; r <= 4; r++)
+    for(dy = -r; dy <= r; dy++)
+      for(dx = -r; dx <= r; dx++)
+        {
+          int x = sx_ + dx, y = sy_ + dy, cx = x - x0_, cy = y - d_->y;
+          if((dx != -r && dx != r && dy != -r && dy != r) || x < 0 || y < 0 || x >= 320 || y >= 240)
+            continue;
+          if(cx >= 0 && cy >= 0 && cx < P->w && cy < P->h &&
+             P->one[(cy * P->w + (d_->mirror ? P->w - 1 - cx : cx)) * 4 + 3])
+            continue;                                    /* inside the pose */
+          if(HD_SCRMASK[y * 384 + x])
+            continue;                                    /* something drawn there */
+          *ok_ = 1;
+          return out_[(size_t)(y * 4 + 2) * 1280 + x * 4 + 2];
+        }
+  *ok_ = 0;
+  return 0;
+}
+
+static void
+hands_apply(const uint32_t *buf_, uint32_t *out_, int F_, int frame_)
+{
+  int r, n = 0, set = 0, k;
+  /* the screen shows what the game drew a frame or two earlier: use the
+     pose set (this frame, or one of the last frames that drew one) that
+     best matches what is on screen now */
+  if(F_ == 4 && OPT_GFX && NHAND)
+    {
+      double best = -1;
+      for(k = 0; k < HD_HIST; k++)
+        {
+          int o = 0, v = 0;
+          for(r = 0; r < NHDRAW[k]; r++) v += hand_vis(&HDRAW[k][r],buf_,&o);
+          if(o && (double)v / o > best) { best = (double)v / o; set = k; n = NHDRAW[k]; }
+        }
+    }
+  if(F_ == 4 && OPT_GFX && NHAND)
+    for(r = 0; r < n; r++)
+      {
+        const hand_draw_t *d = &HDRAW[set][r];
+        const hand_t *P = &HAND[d->idx];
+        int x0 = d->mirror ? d->x - P->w + 1 : d->x, cx, cy, opq = 0, vis = 0;
+        for(cy = 0; cy < P->h; cy++)
+          for(cx = 0; cx < P->w; cx++)
+            {
+              int sx = x0 + cx, sy = d->y + cy, ux = d->mirror ? P->w - 1 - cx : cx;
+              const uint8_t *o = &P->one[(cy * P->w + ux) * 4];
+              if(!o[3] || sx < 0 || sy < 0 || sx >= 320 || sy >= 240) continue;
+              opq++;
+              vis += c5near(buf_[(size_t)(sy * 2) * 640 + sx * 2],o);
+            }
+#ifdef SW_HANDDUMP
+        if(LOG) fprintf(LOG,"apply frame=%d set=%d idx=%d x=%d y=%d opq=%d vis=%d\n",frame_,set,d->idx,x0,d->y,opq,vis);
+#endif
+        if(!opq || vis * 10 < opq * 3)
+          continue;                                     /* not (or hardly) on screen */
+        for(cy = 0; cy < P->h; cy++)
+          for(cx = 0; cx < P->w; cx++)
+            {
+              int sx = x0 + cx, sy = d->y + cy, ux = d->mirror ? P->w - 1 - cx : cx, i2, j2, under, hasbg = 0;
+              uint32_t bg = 0;
+              const uint8_t *o = &P->one[(cy * P->w + ux) * 4];
+              if(sx < 0 || sy < 0 || sx >= 320 || sy >= 240) continue;
+              if(o[3])
+                {
+                  if(!c5near(buf_[(size_t)(sy * 2) * 640 + sx * 2],o)) continue;   /* covered */
+                  /* enhanced video under the pose: this frame's, or one up to
+                     3 frames old (the video under a hand changes little) */
+                  under = VIDF[sy * 384 + sx] > 0 && frame_ - VIDF[sy * 384 + sx] >= 0 && frame_ - VIDF[sy * 384 + sx] <= 3;
+                  if(!under) bg = hand_bg(out_,P,d,x0,sx,sy,&hasbg);
+                }
+              else
+                {
+                  if(HD_SCRMASK[sy * 384 + sx]) continue;   /* something else drawn here */
+                  under = 0;                                 /* already enhanced video */
+                }
+              for(i2 = 0; i2 < 4; i2++)
+                {
+                  uint32_t *dp = &out_[(size_t)(sy * 4 + i2) * 1280 + sx * 4];
+                  const uint32_t *vp = &VID4[(size_t)(sy * 4 + i2) * 1280 + sx * 4];
+                  for(j2 = 0; j2 < 4; j2++)
+                    {
+                      int hx = 4 * ux + (d->mirror ? 3 - j2 : j2);
+                      const uint8_t *s = &P->hd[((size_t)(4 * cy + i2) * 4 * P->w + hx) * 4];
+                      uint32_t b = under ? vp[j2] : hasbg ? bg : dp[j2], a = s[3];
+                      if(!a && !under && !hasbg) continue;
+                      dp[j2] = ((((b >> 16) & 0xFF) * (255 - a) + s[0] * a + 127) / 255) << 16
+                             | ((((b >> 8) & 0xFF) * (255 - a) + s[1] * a + 127) / 255) << 8
+                             | (((b & 0xFF) * (255 - a) + s[2] * a + 127) / 255);
+                    }
+                }
+            }
+      }
+  if(NHDRAW[0])
+    {
+      for(k = HD_HIST - 1; k > 0; k--)
+        { memcpy(HDRAW[k],HDRAW[k-1],sizeof(HDRAW[0])); NHDRAW[k] = NHDRAW[k-1]; }
+    }
+  NHDRAW[0] = 0;
+}
+
 /* fit  screen = a*hd + b  per channel between the on-screen (tinted) low-res
    frame and HD frame m_; robust: refit on the best 60% of samples (the
    PAUSED sign, crosshair etc. are outliers). Returns median error or 1e9. */
@@ -1475,9 +1753,17 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           int i2, j2;
           for(x = 0; x < w->w; x++)
             {
+              uint32_t *tgt = out;
               if(mrow[x])
-                continue;
-              if(G->overlay)
+                {
+                  /* overlay pixel: keep the game's, but remember the enhanced
+                     video under it for an enhanced overlay pose (hands_apply) */
+                  if(F != 4 || !opera_hd_overlay_draw)
+                    continue;
+                  tgt = VID4;
+                  VIDF[(w->y + y) * 384 + w->x + x] = frame_;
+                }
+              else if(G->overlay)
                 {
                   /* keep what the game drew into the video: compare the emulated
                      pixel with the average of the enhanced block */
@@ -1498,7 +1784,7 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
               for(i2 = 0; i2 < F; i2++)
                 {
                   int py = (w->y + y) * F + i2, px = (w->x + x) * F;
-                  uint32_t *d = &out[(size_t)py * OW + px];
+                  uint32_t *d = &tgt[(size_t)py * OW + px];
                   const uint8_t *sp = &hd[((size_t)(oy + F*y + i2) * hw + ox + F*x) * 4];
                   for(j2 = 0; j2 < F; j2++, sp += 4)
                     {
@@ -1539,6 +1825,7 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
         }
     }
 
+  hands_apply(buf_,out,F,frame_);
   if(OPT_GFX)
     art_apply(buf_,out,F);
   return out;

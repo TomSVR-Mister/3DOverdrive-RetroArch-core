@@ -29,6 +29,10 @@
   */
 
 #include "boolean.h"
+#ifdef SW_HANDDUMP
+#include <stdio.h>
+#include <stdlib.h>
+#endif
 #include "endianness.h"
 #include "flags.h"
 #include "inline.h"
@@ -761,6 +765,10 @@ static uint32_t const BPP[8] = {1,1,2,4,6,8,16,1};
    PPROC blending - so translucency, scaling and movement behave as before. */
 typedef const uint8_t *(*opera_hd_lookup_fn)(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, uint32_t flags_, int *w_, int *h_);
 opera_hd_lookup_fn opera_hd_cel_lookup = NULL;
+/* called for each overlay cel (lookup result 2) with its position, so an
+   enhanced version can be drawn at output resolution (hd_fmv.c) */
+typedef void (*opera_hd_overlay_fn)(uint32_t pdata_, uint32_t pre0_, uint32_t pre1_, int32_t xpos_, int32_t ypos_, int32_t hdx_, int32_t vdy_);
+opera_hd_overlay_fn opera_hd_overlay_draw = NULL;
 static int HDM_FORCE_MADAM = 0;   /* set while drawing a cel the lookup marked as an overlay */
 static const uint8_t *HDS = NULL;
 static int    HDS_W, HDS_H;
@@ -1424,6 +1432,19 @@ opera_madam_cel_handle(void)
       if(flag_is_set(CCBFLAGS,CCB_SKIP))
         continue;
 
+#ifdef SW_HANDDUMP
+      {
+        /* debug: every cel drawn, full CCB (env SUPREMEWARRIOR_CELLOG) */
+        static FILE *CL = NULL; static int clinit = 0;
+        if(!clinit) { const char *p = getenv("SUPREMEWARRIOR_CELLOG"); clinit = 1; if(p) CL = fopen(p,"a"); }
+        if(CL)
+          {
+            fprintf(CL,"cel fl=%08x pd=%08x pre0=%08x pre1=%08x x=%d y=%d hdx=%d hdy=%d vdx=%d vdy=%d hddx=%d hddy=%d pixc=%08x clip=%d,%d\n",
+                    CCBFLAGS,PDATA,PRE0,PRE1,XPOS1616,YPOS1616,HDX1616,HDY1616,VDX1616,VDY1616,HDDX1616,HDDY1616,PIXC,MADAM.clipx,MADAM.clipy);
+            fflush(CL);
+          }
+      }
+#endif
       HDS = NULL;
       HDM_MADAM_VAL = 1;
       HDM_FORCE_MADAM = 0;
@@ -1441,6 +1462,8 @@ opera_madam_cel_handle(void)
               /* drawn from a VRAM buffer the CPU filled, but it is an overlay
                  over the video (Supreme Warrior's hands): count it as MADAM */
               HDM_FORCE_MADAM = 1;
+              if(opera_hd_overlay_draw)
+                opera_hd_overlay_draw(PDATA,PRE0,PRE1,XPOS1616,YPOS1616,HDX1616,VDY1616);
             }
           else if(img)
             {
