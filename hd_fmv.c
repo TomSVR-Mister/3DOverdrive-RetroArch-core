@@ -1390,7 +1390,7 @@ static int
 hand_vis(const hand_draw_t *d_, const uint32_t *buf_, int *opq_)
 {
   const hand_t *P = &HAND[d_->idx];
-  int x0 = d_->mirror ? d_->x - P->w + 1 : d_->x, cx, cy, vis = 0;
+  int x0 = d_->mirror ? d_->x - P->w : d_->x, cx, cy, vis = 0;
   for(cy = 0; cy < P->h; cy++)
     for(cx = 0; cx < P->w; cx++)
       {
@@ -1452,7 +1452,7 @@ hands_apply(const uint32_t *buf_, uint32_t *out_, int F_, int frame_)
       {
         const hand_draw_t *d = &HDRAW[set][r];
         const hand_t *P = &HAND[d->idx];
-        int x0 = d->mirror ? d->x - P->w + 1 : d->x, cx, cy, opq = 0, vis = 0;
+        int x0 = d->mirror ? d->x - P->w : d->x, cx, cy, opq = 0, vis = 0;   /* HDX = -1: the cel covers x-w .. x-1 */
         for(cy = 0; cy < P->h; cy++)
           for(cx = 0; cx < P->w; cx++)
             {
