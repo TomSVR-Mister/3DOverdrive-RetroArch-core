@@ -88,5 +88,13 @@ jobs:
             Prebuilt 3DOverdrive cores. Unzip and put the core file in RetroArch's `cores` folder
             (Android: load the `.so` for your device's ABI through RetroArch's "Install or Restore a Core").
 
-            Sewer Shark enhanced video pack: https://archive.org/details/sewer-shark-hd
-            Put `SewerSharkHD.3dov` in RetroArch's `system` folder. You need your own copy of the game and a 3DO BIOS.
+            Enhanced video packs (you need your own copy of the game and a 3DO BIOS):
+
+            - Sewer Shark: https://archive.org/details/sewer-shark-hd
+              Put `SewerSharkHD.3dov` in RetroArch's `system` folder.
+            - Supreme Warrior: https://archive.org/details/supreme-warrior-hd
+              Put `SupremeWarriorHD1.3dov` (disc 1) and `SupremeWarriorHD2.3dov` (disc 2) in RetroArch's `system` folder.
+              New in this core: enhanced video for both discs, redrawn 4x hands and feet in fights, and the
+              video stays enhanced through hit effects. Set NVRAM Storage to Shared to carry saves to disc 2.
+
+            Details and screenshots: https://github.com/TomSVR-Mister/3DOverdrive-RetroArch-core#supreme-warrior
