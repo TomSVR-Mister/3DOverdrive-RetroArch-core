@@ -35,6 +35,11 @@ static int       SCALE = 2;
 static uint32_t *OUT4 = NULL;
 
 #include "hd_fmv.h"
+#ifdef SW_HANDDUMP
+#include <features/features_cpu.h>
+static int64_t PT_SEARCH, PT_GET, PT_HANDS, PT_TINT;
+#define PT_NOW() ((int64_t)cpu_features_get_time_usec())
+#endif
 #include "opera_lr_callbacks.h"
 #include <libretro.h>
 
@@ -389,6 +394,7 @@ static float     LAST_TH[HD_MAXWIN][96];
 static int       LAST_M[HD_MAXWIN];
 static int       LAST_SEARCHED[HD_MAXWIN];
 static int       LAST_HIT_FRAME[HD_MAXWIN];
+static int       LAST_MATCH_M[HD_MAXWIN];   /* frame matched at LAST_HIT_FRAME (shown or not) */
 static int       GOOD_M[HD_MAXWIN];   /* last frame shown enhanced, per window */
 static int       LAST_FULL[HD_MAXWIN];
 
@@ -624,7 +630,7 @@ hd_fmv_init(const char *system_dir_, const char *game_path_)
     retro_log_printf_cb(RETRO_LOG_INFO,"[3DOverdrive] game profile: %s\n",G->name);
 
   memset(LAST_TH,0,sizeof(LAST_TH));
-  { int q; for(q = 0; q < HD_MAXWIN; q++) { LAST_M[q] = -1; LAST_HIT_FRAME[q] = -1000; LAST_FULL[q] = -1000; LAST_SEARCHED[q] = 0; GOOD_M[q] = -1; } }
+  { int q; for(q = 0; q < HD_MAXWIN; q++) { LAST_M[q] = -1; LAST_HIT_FRAME[q] = -1000; LAST_FULL[q] = -1000; LAST_SEARCHED[q] = 0; GOOD_M[q] = -1; LAST_MATCH_M[q] = -1; } }
   if(G->env_log && getenv(G->env_log) && !LOG)
     LOG = fopen(getenv(G->env_log),"w");
   art_load();
@@ -662,6 +668,7 @@ static int        PF_Q[4], PF_QN = 0;
 static slock_t   *PF_LOCK = NULL;
 static scond_t   *PF_COND = NULL;
 static sthread_t *PF_TH   = NULL;
+static sthread_t *PF_TH2  = NULL;   /* second decoder: a new shot's first frame need not wait */
 static int        PF_QUIT = 0;
 
 static void
@@ -717,7 +724,10 @@ pf_start(void)
   PF_COND = scond_new();
   PF_QUIT = 0;
   if(PF_LOCK && PF_COND)
-    PF_TH = sthread_create(pf_worker,NULL);
+    {
+      PF_TH = sthread_create(pf_worker,NULL);
+      PF_TH2 = sthread_create(pf_worker,NULL);
+    }
 }
 
 void
@@ -728,10 +738,11 @@ hd_fmv_deinit(void)
     {
       slock_lock(PF_LOCK);
       PF_QUIT = 1;
-      scond_signal(PF_COND);
+      scond_broadcast(PF_COND);
       slock_unlock(PF_LOCK);
       sthread_join(PF_TH);
       PF_TH = NULL;
+      if(PF_TH2) { sthread_join(PF_TH2); PF_TH2 = NULL; }
       for(k = 0; k < PF; k++)
         { free(PFC[k].pix); PFC[k].pix = NULL; PFC[k].idx = -1; }
       scond_free(PF_COND); PF_COND = NULL;
@@ -742,16 +753,16 @@ hd_fmv_deinit(void)
   pk_close();
 }
 
-/* ask the worker for the frames after i_ in the same shot (newest first) */
+/* ask the worker for frames i_+first_ .. i_+3 of the same shot (nearest first) */
 static void
-pf_request(int i_)
+pf_queue(int i_, int first_)
 {
   int d;
   if(!PF_TH)
     return;
   slock_lock(PF_LOCK);
   PF_QN = 0;
-  for(d = 1; d <= 3 && i_ + d < N; d++)
+  for(d = first_; d <= 3 && i_ + d < N; d++)
     {
       int k, have = 0;
       if(memcmp(E[i_ + d].seq,E[i_].seq,8) || memcmp(E[i_ + d].trk,E[i_].trk,4))
@@ -762,8 +773,15 @@ pf_request(int i_)
         PF_Q[PF_QN++] = i_ + d;
     }
   if(PF_QN)
-    scond_signal(PF_COND);
+    scond_broadcast(PF_COND);
   slock_unlock(PF_LOCK);
+}
+
+/* the frames after i_ in the same shot */
+static void
+pf_request(int i_)
+{
+  pf_queue(i_,1);
 }
 
 /* frame i_ already decoded (cache or prefetch buffer)? */
@@ -1539,16 +1557,26 @@ pause_fit(const uint32_t *buf_, int F_, const hd_win_t *w_, int m_, double *A, d
 {
   enum { MAXS = 4096 };
   static float P[MAXS][3], H[MAXS][3], R[MAXS];
-  int hw, hh, ox, oy, x, y, c, n = 0, pass, i;
+  int hw, hh, ox, oy, x, y, c, n = 0, pass, i, skipmask;
   const uint8_t *hd = hd_get(m_,&hw,&hh);
   if(!hd) return 1e9;
   ox = (E[m_].cw - E[m_].w) * F_ / 2;
   oy = (E[m_].ch - E[m_].h) * F_ / 2;
   if(hw < ox + F_*w_->w || hh < oy + F_*w_->h) return 1e9;
+  {
+    /* leave out what the game drew over the video (hands, HUD), unless it
+       covers nearly everything (the pause tint is drawn over the whole window) */
+    int msk = 0, tot = 0;
+    for(y = 1; y < w_->h; y += 4)
+      for(x = 1; x < w_->w; x += 4, tot++)
+        msk += HD_SCRMASK[(w_->y + y) * 384 + w_->x + x] != 0;
+    skipmask = msk * 10 < tot * 9;
+  }
   for(y = 1; y < w_->h && n < MAXS; y += 4)
     for(x = 1; x < w_->w && n < MAXS; x += 4)
       {
         uint32_t p = buf_[(size_t)((w_->y + y) * 2) * 640 + (w_->x + x) * 2];
+        if(skipmask && HD_SCRMASK[(w_->y + y) * 384 + w_->x + x]) continue;
         const uint8_t *h = &hd[((size_t)(oy + F_*y) * hw + ox + F_*x) * 4];
         for(c = 0; c < 3; c++) { P[n][c] = (p >> (16 - 8*c)) & 0xFF; H[n][c] = h[c]; }
         n++;
@@ -1688,7 +1716,7 @@ pause_fill(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t
 static int
 tint_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *w_, int m0_, int lo_, int hi_, int frame_)
 {
-  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2, tried = 0;
+  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2, tried = 0, keepmask;
   double A[3] = {1,1,1}, B[3] = {0,0,0}, be = 1e9;
   const uint8_t *hd;
   {
@@ -1706,38 +1734,48 @@ tint_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *
   /* only frames already decoded (cache or prefetch): never decode here,
      that cost up to ~40 ms per frame. Ask the prefetcher for the frame
      the video should be at, for the next game frames. */
-  for(d = lo_; d <= hi_ && tried < 2; d++)
+  for(i2 = 0; i2 <= hi_ - lo_ && tried < 3; i2++)
     {
-      int m = m0_ + d; double a2[3], b2[3], e;
+      /* nearest the expected frame (middle of lo_..hi_) first */
+      int mid = (lo_ + hi_ + 1) / 2, dd = (i2 + 1) / 2;
+      double a2[3], b2[3], e; int m;
+      d = (i2 & 1) ? mid - dd : mid + dd;
+      if(d < lo_ || d > hi_) continue;
+      m = m0_ + d;
       if(m < 0 || m >= N || memcmp(E[m].seq,E[m0_].seq,8) || memcmp(E[m].trk,E[m0_].trk,3)) continue;
       if(!hd_have(m)) { if(LOG) fprintf(LOG,"%d tint skip m=%d (not decoded)%c",frame_,m,10); continue; }
       tried++;
       e = pause_fit(buf_,F_,w_,m,a2,b2);
       if(e < be) { be = e; best = m; memcpy(A,a2,sizeof(A)); memcpy(B,b2,sizeof(B)); }
     }
-  if(m0_ + (lo_ + hi_) / 2 - 1 >= 0 && m0_ + (lo_ + hi_) / 2 < N)
-    pf_request(m0_ + (lo_ + hi_) / 2 - 1);      /* queues the frames after it: the expected one first */
+  if(m0_ + (lo_ + hi_) / 2 >= 0 && m0_ + (lo_ + hi_) / 2 < N)
+    pf_queue(m0_ + (lo_ + hi_) / 2,0);          /* the expected frame first */
   if(LOG) fprintf(LOG,"%d tint m=%d a=%.2f,%.2f,%.2f b=%.0f,%.0f,%.0f med=%.1f\n",frame_,best,A[0],A[1],A[2],B[0],B[1],B[2],be);
   if(best < 0) return -1;
   if(A[0] < 0.5 && A[1] < 0.5 && A[2] < 0.5) return -1;   /* no channel carries the picture */
-  {
-    /* a mild tint (the hit darkening, which also blurs the picture) may
-       fit less closely; a strong colour flash must fit closely */
-    int mild = 1;
-    for(c = 0; c < 3; c++) if(A[c] < 0.5 || A[c] > 1.3) mild = 0;
-    if(be > (mild ? 20.0 : 8.0)) return -1;
-  }
+  /* only a close fit is drawn pixel by pixel; a looser one (the hit
+     effect also blurs) goes to detail_try, which keeps the game's picture
+     and adds only fine detail, so no patchwork of the two can show */
+  if(be > 8.0) return -1;
   hd = hd_get(best,&hw,&hh);
   if(!hd) return -1;
   ox = (E[best].cw - E[best].w) * F_ / 2;
   oy = (E[best].ch - E[best].h) * F_ / 2;
   if(hw < ox + F_*w_->w || hh < oy + F_*w_->h) return -1;
+  {
+    int msk = 0;
+    for(y = 0; y < w_->h; y++)
+      for(x = 0; x < w_->w; x++)
+        msk += HD_SCRMASK[(w_->y + y) * 384 + w_->x + x] != 0;
+    keepmask = msk * 10 < w_->w * w_->h * 9;   /* overlays (menu, hands) stay the game's */
+  }
   for(y = 0; y < w_->h; y++)
     for(x = 0; x < w_->w; x++)
       {
         uint32_t p = buf_[(size_t)((w_->y + y) * 2) * 640 + (w_->x + x) * 2];
         const uint8_t *hc = &hd[((size_t)(oy + F_*y + F_/2) * hw + ox + F_*x + F_/2) * 4];
         int e = 0;
+        if(keepmask && HD_SCRMASK[(w_->y + y) * 384 + w_->x + x]) continue;
         for(c = 0; c < 3; c++)
           {
             int v = (int)(A[c] * hc[c] + B[c] + 0.5);
@@ -1761,6 +1799,120 @@ tint_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *
               }
           }
       }
+  return best;
+}
+
+/* hit effect the tint fit cannot follow (the game darkens AND blurs the
+   picture for a few frames): keep the low frequencies (colour, brightness,
+   blur) from the game's own screen and add only the fine detail of the
+   expected enhanced frame:
+     out = smooth 4x of screen + conf * a * (hd - smooth 4x of hd at 1x)
+   conf fades to 0 as the expected frame fits the screen worse, so a wrong
+   guess looks like a smooth upscale, never like a wrong picture. Only frames
+   already decoded are used. Overlay pixels (hands, HUD) keep the game's. */
+static int
+detail_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *w_, int m0_, int lo_, int hi_, int frame_)
+{
+  static float SC[384 * 288 * 3], HM[384 * 288 * 3];
+  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2, tried = 0, W = w_->w, H = w_->h;
+  double A[3] = {1,1,1}, B[3] = {0,0,0}, be = 1e9, conf;
+  const uint8_t *hd;
+  for(i2 = 0; i2 <= hi_ - lo_ && tried < 3; i2++)
+    {
+      /* nearest the expected frame (middle of lo_..hi_) first */
+      int mid = (lo_ + hi_ + 1) / 2, dd = (i2 + 1) / 2;
+      double a2[3], b2[3], e; int m;
+      d = (i2 & 1) ? mid - dd : mid + dd;
+      if(d < lo_ || d > hi_) continue;
+      m = m0_ + d;
+      if(m < 0 || m >= N || memcmp(E[m].seq,E[m0_].seq,8) || memcmp(E[m].trk,E[m0_].trk,3)) continue;
+      if(!hd_have(m)) continue;
+      tried++;
+      e = pause_fit(buf_,F_,w_,m,a2,b2);
+      if(e < be) { be = e; best = m; memcpy(A,a2,sizeof(A)); memcpy(B,b2,sizeof(B)); }
+    }
+  conf = (40.0 - be) / 25.0;                   /* fit 15 or better: full detail; 40: none */
+  if(conf > 1) conf = 1;
+  if(LOG) fprintf(LOG,"%d detail m=%d a=%.2f,%.2f,%.2f med=%.1f conf=%.2f\n",frame_,best,A[0],A[1],A[2],be,conf);
+  if(best < 0 || conf <= 0.05) return -1;
+  for(c = 0; c < 3; c++) if(A[c] < 0.5 || A[c] > 1.5) return -1;   /* colour flashes, menus: not this */
+  hd = hd_get(best,&hw,&hh);
+  if(!hd) return -1;
+  ox = (E[best].cw - E[best].w) * F_ / 2;
+  oy = (E[best].ch - E[best].h) * F_ / 2;
+  if(hw < ox + F_*W || hh < oy + F_*H) return -1;
+  /* 1x grids: the screen, and the enhanced frame averaged down to 1x */
+  for(y = 0; y < H; y++)
+    for(x = 0; x < W; x++)
+      {
+        uint32_t p = buf_[(size_t)((w_->y + y) * 2) * 640 + (w_->x + x) * 2];
+        int s3[3] = {0,0,0};
+        for(i2 = 0; i2 < F_; i2++)
+          {
+            const uint8_t *h = &hd[((size_t)(oy + F_*y + i2) * hw + ox + F_*x) * 4];
+            for(j2 = 0; j2 < F_; j2++, h += 4) { s3[0] += h[0]; s3[1] += h[1]; s3[2] += h[2]; }
+          }
+        for(c = 0; c < 3; c++)
+          {
+            SC[(y * W + x) * 3 + c] = (float)((p >> (16 - 8*c)) & 0xFF);
+            HM[(y * W + x) * 3 + c] = (float)s3[c] / (F_ * F_);
+          }
+      }
+  {
+    /* 3x3 box on both grids: the game's dither must not survive in the
+       low frequencies (the fine detail comes from the enhanced frame) */
+    static float T[384 * 288 * 3];
+    float *G2[2] = { SC, HM }; int g;
+    for(g = 0; g < 2; g++)
+      {
+        float *Gp = G2[g];
+        for(y = 0; y < H; y++)
+          for(x = 0; x < W; x++)
+            for(c = 0; c < 3; c++)
+              {
+                float sum = 0; int n = 0, yy, xx;
+                for(yy = y - 1; yy <= y + 1; yy++)
+                  for(xx = x - 1; xx <= x + 1; xx++)
+                    if(yy >= 0 && yy < H && xx >= 0 && xx < W) { sum += Gp[(yy * W + xx) * 3 + c]; n++; }
+                T[(y * W + x) * 3 + c] = sum / n;
+              }
+        memcpy(Gp,T,sizeof(float) * W * H * 3);
+      }
+  }
+  for(y = 0; y < H; y++)
+    {
+      const uint8_t *mrow = &HD_SCRMASK[(w_->y + y) * 384 + w_->x];
+      for(i2 = 0; i2 < F_; i2++)
+        {
+          float fy = y + (i2 + 0.5f) / F_ - 0.5f;
+          int y0 = fy < 0 ? 0 : (int)fy, y1 = y0 + 1 < H ? y0 + 1 : H - 1;
+          float ty = fy < 0 ? 0 : fy - y0;
+          uint32_t *dd = &out_[(size_t)((w_->y + y) * F_ + i2) * OW_ + w_->x * F_];
+          const uint8_t *h = &hd[((size_t)(oy + F_*y + i2) * hw + ox) * 4];
+          for(x = 0; x < W; x++)
+            {
+              if(mrow[x]) { h += 4 * F_; continue; }          /* hands, HUD: the game's */
+              for(j2 = 0; j2 < F_; j2++, h += 4)
+                {
+                  float fx = x + (j2 + 0.5f) / F_ - 0.5f;
+                  int x0 = fx < 0 ? 0 : (int)fx, x1 = x0 + 1 < W ? x0 + 1 : W - 1;
+                  float tx = fx < 0 ? 0 : fx - x0;
+                  uint32_t o = 0;
+                  for(c = 0; c < 3; c++)
+                    {
+                      const float *S0 = &SC[(y0 * W) * 3 + c], *S1 = &SC[(y1 * W) * 3 + c];
+                      const float *M0 = &HM[(y0 * W) * 3 + c], *M1 = &HM[(y1 * W) * 3 + c];
+                      float lo = (S0[x0*3] * (1 - tx) + S0[x1*3] * tx) * (1 - ty) + (S1[x0*3] * (1 - tx) + S1[x1*3] * tx) * ty;
+                      float hm = (M0[x0*3] * (1 - tx) + M0[x1*3] * tx) * (1 - ty) + (M1[x0*3] * (1 - tx) + M1[x1*3] * tx) * ty;
+                      int v = (int)(lo + conf * A[c] * (h[c] - hm) + 0.5f);
+                      v = v < 0 ? 0 : v > 255 ? 255 : v;
+                      o |= (uint32_t)v << (16 - 8*c);
+                    }
+                  dd[x * F_ + j2] = o;
+                }
+            }
+        }
+    }
   return best;
 }
 
@@ -1821,7 +1973,13 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           /* while another window is showing video, look here only now and then */
           full = !other || (frame_ - LAST_FULL[k] >= 30);
           if(full) LAST_FULL[k] = frame_;
+#ifdef SW_HANDDUMP
+          { int64_t t0 = PT_NOW();
+#endif
           m = search(w,th,wt,LAST_M[k],full,&d);
+#ifdef SW_HANDDUMP
+          PT_SEARCH += PT_NOW() - t0; }
+#endif
           LAST_SEARCHED[k] = 1;
           cand = m;
           if(d > 4.0f || (mean < 12.0f && d > 1.5f &&
@@ -1841,17 +1999,43 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
         {
           /* tinted (hit flash) or darkened video shortly after a match:
              the video goes on, about one frame per 5 game frames */
-          int g = GOOD_M[k], el = frame_ - LAST_HIT_FRAME[k], r = -1;
+          int g = LAST_MATCH_M[k] >= 0 ? LAST_MATCH_M[k] : GOOD_M[k], el = frame_ - LAST_HIT_FRAME[k], r = -1;
           if(OPT_GFX && g >= 0 && el > 0 && el <= 30 && (is_gameplay(g) ? OPT_GAME : OPT_CUT))
-            r = tint_try(buf_,out,F,OW,w,g,el / 5 - 1,el / 5 + 2,frame_);
-          if(r >= 0) { GOOD_M[k] = r; LAST_HIT_FRAME[k] = frame_; }
+            {
+              r = tint_try(buf_,out,F,OW,w,g,el / 5 - 1,el / 5 + 2,frame_);
+              /* still nothing just after a match (hit: darkened and blurred):
+                 the game's picture with the enhanced frame's fine detail */
+              if(r < 0 && !(DRAM && G->pause_addr && DRAM[G->pause_addr] == G->pause_val))
+                {
+                  r = detail_try(buf_,out,F,OW,w,g,el / 5 - 1,el / 5 + 2,frame_);
+                  if(r >= 0) r = -2 - r;               /* drawn, but not a match: do not advance */
+                }
+            }
+          if(r >= 0) { GOOD_M[k] = r; LAST_HIT_FRAME[k] = frame_; LAST_MATCH_M[k] = r; }
+          else if(r <= -2) GOOD_M[k] = -2 - r;          /* detail transfer: follow the clip, keep the timer */
           continue;
         }
       LAST_HIT_FRAME[k] = frame_;
+      LAST_MATCH_M[k] = m;
       if(!(is_gameplay(m) ? OPT_GAME : OPT_CUT))
         continue;
 
+      if(!hd_have(m))
+        {
+          /* not decoded yet (a new shot): decoding here would stall the
+             game for 30-40 ms. Let the worker do it; this frame stays as
+             the game drew it */
+          pf_queue(m,0);
+          if(LOG) fprintf(LOG,"%d wait m=%d\n",frame_,m);
+          continue;
+        }
+#ifdef SW_HANDDUMP
+      { int64_t t0 = PT_NOW();
+#endif
       hd = hd_get(m,&hw,&hh);
+#ifdef SW_HANDDUMP
+      PT_GET += PT_NOW() - t0; }
+#endif
       if(!hd)
         continue;
       ox = (E[m].cw - E[m].w) * F / 2;   /* (canvas - frame)/2 * F */
@@ -1938,7 +2122,16 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
         }
     }
 
+#ifdef SW_HANDDUMP
+  { int64_t t0 = PT_NOW();
+#endif
   hands_apply(buf_,out,F,frame_);
+#ifdef SW_HANDDUMP
+  PT_HANDS += PT_NOW() - t0; }
+  if(LOG && PT_SEARCH + PT_GET + PT_HANDS + PT_TINT > 8000)
+    fprintf(LOG,"%d slow search=%lldus get=%lldus hands=%lldus tint=%lldus\n",frame_,(long long)PT_SEARCH,(long long)PT_GET,(long long)PT_HANDS,(long long)PT_TINT);
+  PT_SEARCH = PT_GET = PT_HANDS = PT_TINT = 0;
+#endif
   if(OPT_GFX)
     art_apply(buf_,out,F);
   return out;
