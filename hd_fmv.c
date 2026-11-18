@@ -766,6 +766,23 @@ pf_request(int i_)
   slock_unlock(PF_LOCK);
 }
 
+/* frame i_ already decoded (cache or prefetch buffer)? */
+static int
+hd_have(int i_)
+{
+  int k, have = 0;
+  for(k = 0; k < CACHE; k++)
+    if(C_IDX[k] == i_) return 1;
+  if(PF_TH)
+    {
+      slock_lock(PF_LOCK);
+      for(k = 0; k < PF; k++)
+        have |= PFC[k].idx == i_ && PFC[k].pix != NULL;
+      slock_unlock(PF_LOCK);
+    }
+  return have;
+}
+
 static const uint8_t*
 hd_get(int i_, int *w_, int *h_)
 {
@@ -834,7 +851,9 @@ thumb(const uint32_t *buf_, int pitch_, hd_win_t const *w_, float *th_, float *w
               }
           }
         th_[by*12 + bx] = n ? (float)s / (float)(3 * n) : 0.0f;
-        wt_[by*12 + bx] = (n == (uint32_t)(bw * bh)) ? 1.0f : 0.0f;
+        /* blocks partly covered by an overlay (e.g. a big hand pose) still
+           count, with less weight; mostly covered ones do not */
+        wt_[by*12 + bx] = (n == (uint32_t)(bw * bh)) ? 1.0f : (4 * n >= (uint32_t)(3 * bw * bh)) ? 0.5f : 0.0f;
       }
 }
 
@@ -1669,18 +1688,45 @@ pause_fill(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t
 static int
 tint_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *w_, int m0_, int lo_, int hi_, int frame_)
 {
-  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2;
+  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2, tried = 0;
   double A[3] = {1,1,1}, B[3] = {0,0,0}, be = 1e9;
   const uint8_t *hd;
-  for(d = lo_; d <= hi_; d++)
+  {
+    /* a flat window (the flash at full strength) has nothing to enhance */
+    int n = 0; double s1 = 0, s2 = 0;
+    for(y = 2; y < w_->h; y += 8)
+      for(x = 2; x < w_->w; x += 8)
+        {
+          uint32_t p = buf_[(size_t)((w_->y + y) * 2) * 640 + (w_->x + x) * 2];
+          double l = (((p >> 16) & 0xFF) + ((p >> 8) & 0xFF) + (p & 0xFF)) / 3.0;
+          s1 += l; s2 += l * l; n++;
+        }
+    if(!n || s2 / n - (s1 / n) * (s1 / n) < 36.0) return -1;
+  }
+  /* only frames already decoded (cache or prefetch): never decode here,
+     that cost up to ~40 ms per frame. Ask the prefetcher for the frame
+     the video should be at, for the next game frames. */
+  for(d = lo_; d <= hi_ && tried < 2; d++)
     {
       int m = m0_ + d; double a2[3], b2[3], e;
       if(m < 0 || m >= N || memcmp(E[m].seq,E[m0_].seq,8) || memcmp(E[m].trk,E[m0_].trk,3)) continue;
+      if(!hd_have(m)) { if(LOG) fprintf(LOG,"%d tint skip m=%d (not decoded)%c",frame_,m,10); continue; }
+      tried++;
       e = pause_fit(buf_,F_,w_,m,a2,b2);
       if(e < be) { be = e; best = m; memcpy(A,a2,sizeof(A)); memcpy(B,b2,sizeof(B)); }
     }
+  if(m0_ + (lo_ + hi_) / 2 - 1 >= 0 && m0_ + (lo_ + hi_) / 2 < N)
+    pf_request(m0_ + (lo_ + hi_) / 2 - 1);      /* queues the frames after it: the expected one first */
   if(LOG) fprintf(LOG,"%d tint m=%d a=%.2f,%.2f,%.2f b=%.0f,%.0f,%.0f med=%.1f\n",frame_,best,A[0],A[1],A[2],B[0],B[1],B[2],be);
-  if(best < 0 || be > 8.0) return -1;
+  if(best < 0) return -1;
+  if(A[0] < 0.5 && A[1] < 0.5 && A[2] < 0.5) return -1;   /* no channel carries the picture */
+  {
+    /* a mild tint (the hit darkening, which also blurs the picture) may
+       fit less closely; a strong colour flash must fit closely */
+    int mild = 1;
+    for(c = 0; c < 3; c++) if(A[c] < 0.5 || A[c] > 1.3) mild = 0;
+    if(be > (mild ? 20.0 : 8.0)) return -1;
+  }
   hd = hd_get(best,&hw,&hh);
   if(!hd) return -1;
   ox = (E[best].cw - E[best].w) * F_ / 2;
@@ -1757,7 +1803,7 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           if(t > md) md = t;
         }
       mean = wsum > 0 ? mean / wsum : 0;
-      if(wsum < 24.0f || mean < 3.0f)          /* black or nearly black: nothing to gain */
+      if(wsum < 6.0f || mean < 3.0f)           /* black, or covered almost entirely: nothing to gain */
         {
           LAST_M[k] = -1;
           LAST_SEARCHED[k] = 0;
@@ -1778,7 +1824,8 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           m = search(w,th,wt,LAST_M[k],full,&d);
           LAST_SEARCHED[k] = 1;
           cand = m;
-          if(d > 4.0f || (mean < 12.0f && d > 1.5f))
+          if(d > 4.0f || (mean < 12.0f && d > 1.5f &&
+                          !(GOOD_M[k] >= 0 && m >= GOOD_M[k] && m <= GOOD_M[k] + 4 && same_track(GOOD_M[k],m))))
             m = -1;
           LAST_M[k] = m;
           memcpy(LAST_TH[k],th,sizeof(th));
@@ -1795,12 +1842,8 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           /* tinted (hit flash) or darkened video shortly after a match:
              the video goes on, about one frame per 5 game frames */
           int g = GOOD_M[k], el = frame_ - LAST_HIT_FRAME[k], r = -1;
-          if(OPT_GFX && g >= 0 && el > 0 && el <= 40 && (is_gameplay(g) ? OPT_GAME : OPT_CUT))
-            {
-              r = tint_try(buf_,out,F,OW,w,g,el / 5 - 3,el / 5 + 3,frame_);
-              if(r < 0 && cand >= 0 && cand != g)
-                r = tint_try(buf_,out,F,OW,w,cand,-1,1,frame_);
-            }
+          if(OPT_GFX && g >= 0 && el > 0 && el <= 30 && (is_gameplay(g) ? OPT_GAME : OPT_CUT))
+            r = tint_try(buf_,out,F,OW,w,g,el / 5 - 1,el / 5 + 2,frame_);
           if(r >= 0) { GOOD_M[k] = r; LAST_HIT_FRAME[k] = frame_; }
           continue;
         }
