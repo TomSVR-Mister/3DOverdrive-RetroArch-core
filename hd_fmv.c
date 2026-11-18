@@ -1661,6 +1661,63 @@ pause_fill(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t
   }
 }
 
+/* the video did not match because the game tinted it (hit flash: magenta,
+   yellow, darkened): fit  screen = a*hd + b  per channel for the frames
+   around m0_ (same clip) and, if one fits, draw it enhanced with that tint.
+   Pixels that do not fit the tinted video (hands, HUD, sprites) keep the
+   game's. Returns the frame drawn or -1. */
+static int
+tint_try(const uint32_t *buf_, uint32_t *out_, int F_, int OW_, const hd_win_t *w_, int m0_, int lo_, int hi_, int frame_)
+{
+  int d, best = -1, hw, hh, ox, oy, x, y, c, i2, j2;
+  double A[3] = {1,1,1}, B[3] = {0,0,0}, be = 1e9;
+  const uint8_t *hd;
+  for(d = lo_; d <= hi_; d++)
+    {
+      int m = m0_ + d; double a2[3], b2[3], e;
+      if(m < 0 || m >= N || memcmp(E[m].seq,E[m0_].seq,8) || memcmp(E[m].trk,E[m0_].trk,3)) continue;
+      e = pause_fit(buf_,F_,w_,m,a2,b2);
+      if(e < be) { be = e; best = m; memcpy(A,a2,sizeof(A)); memcpy(B,b2,sizeof(B)); }
+    }
+  if(LOG) fprintf(LOG,"%d tint m=%d a=%.2f,%.2f,%.2f b=%.0f,%.0f,%.0f med=%.1f\n",frame_,best,A[0],A[1],A[2],B[0],B[1],B[2],be);
+  if(best < 0 || be > 8.0) return -1;
+  hd = hd_get(best,&hw,&hh);
+  if(!hd) return -1;
+  ox = (E[best].cw - E[best].w) * F_ / 2;
+  oy = (E[best].ch - E[best].h) * F_ / 2;
+  if(hw < ox + F_*w_->w || hh < oy + F_*w_->h) return -1;
+  for(y = 0; y < w_->h; y++)
+    for(x = 0; x < w_->w; x++)
+      {
+        uint32_t p = buf_[(size_t)((w_->y + y) * 2) * 640 + (w_->x + x) * 2];
+        const uint8_t *hc = &hd[((size_t)(oy + F_*y + F_/2) * hw + ox + F_*x + F_/2) * 4];
+        int e = 0;
+        for(c = 0; c < 3; c++)
+          {
+            int v = (int)(A[c] * hc[c] + B[c] + 0.5);
+            e += abs((int)((p >> (16 - 8*c)) & 0xFF) - (v < 0 ? 0 : v > 255 ? 255 : v));
+          }
+        if(e > 3 * 28) continue;                    /* not the video: keep the game's pixel */
+        for(i2 = 0; i2 < F_; i2++)
+          {
+            uint32_t *dd = &out_[(size_t)((w_->y + y) * F_ + i2) * OW_ + (w_->x + x) * F_];
+            const uint8_t *h = &hd[((size_t)(oy + F_*y + i2) * hw + ox + F_*x) * 4];
+            for(j2 = 0; j2 < F_; j2++, h += 4)
+              {
+                uint32_t o = 0;
+                for(c = 0; c < 3; c++)
+                  {
+                    int v = (int)(A[c] * h[c] + B[c] + 0.5);
+                    v = v < 0 ? 0 : v > 255 ? 255 : v;
+                    o |= (uint32_t)v << (16 - 8*c);
+                  }
+                dd[j2] = o;
+              }
+          }
+      }
+  return best;
+}
+
 const uint32_t*
 hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int *oh_)
 {
@@ -1688,7 +1745,7 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
     {
       hd_win_t const *w = &WINS[k];
       float th[96], wt[96], mean = 0, md = 0, d = 0, wsum = 0;
-      int i, m, x, y, hw, hh, ox, oy;
+      int i, m, x, y, hw, hh, ox, oy, cand = -1;
       const uint8_t *hd;
 
       thumb(buf_,640,w,th,wt);
@@ -1720,6 +1777,7 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
           if(full) LAST_FULL[k] = frame_;
           m = search(w,th,wt,LAST_M[k],full,&d);
           LAST_SEARCHED[k] = 1;
+          cand = m;
           if(d > 4.0f || (mean < 12.0f && d > 1.5f))
             m = -1;
           LAST_M[k] = m;
@@ -1733,7 +1791,19 @@ hd_fmv_apply(uint32_t *buf_, int width_, int height_, int frame_, int *ow_, int 
             }
         }
       if(m < 0)
-        continue;
+        {
+          /* tinted (hit flash) or darkened video shortly after a match:
+             the video goes on, about one frame per 5 game frames */
+          int g = GOOD_M[k], el = frame_ - LAST_HIT_FRAME[k], r = -1;
+          if(OPT_GFX && g >= 0 && el > 0 && el <= 40 && (is_gameplay(g) ? OPT_GAME : OPT_CUT))
+            {
+              r = tint_try(buf_,out,F,OW,w,g,el / 5 - 3,el / 5 + 3,frame_);
+              if(r < 0 && cand >= 0 && cand != g)
+                r = tint_try(buf_,out,F,OW,w,cand,-1,1,frame_);
+            }
+          if(r >= 0) { GOOD_M[k] = r; LAST_HIT_FRAME[k] = frame_; }
+          continue;
+        }
       LAST_HIT_FRAME[k] = frame_;
       if(!(is_gameplay(m) ? OPT_GAME : OPT_CUT))
         continue;
