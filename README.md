@@ -8,7 +8,8 @@ game's FMV, swapped in frame by frame while the original game runs.
 the libretro 3DO emulator. Everything Opera does still works the same way.
 The core adds the enhanced-pack layer on top.
 
-The first supported title is **Sewer Shark** (Digital Pictures, 1993).
+Supported titles: **Sewer Shark** (Digital Pictures, 1993) and
+**Supreme Warrior** (Digital Pictures, 1994).
 
 ## Downloads
 
@@ -18,16 +19,31 @@ The first supported title is **Sewer Shark** (Digital Pictures, 1993).
   [archive.org/details/sewer-shark-hd](https://archive.org/details/sewer-shark-hd)
   (`SewerSharkHD.3dov`, about 1.8 GB). It only works together with your own
   copy of the game.
+- **Supreme Warrior enhanced video pack:**
+  [archive.org/details/supreme-warrior-hd](https://archive.org/details/supreme-warrior-hd)
+  (`SupremeWarriorHD1.3dov` for disc 1, about 2.5 GB, and
+  `SupremeWarriorHD2.3dov` for disc 2, about 2.0 GB). Each one only works
+  together with your own copy of that disc.
 
 ## Screenshots
 
 Original 3DO video on the left (scaled up), enhanced pack on the right.
 
+### Sewer Shark
+
 ![Tunnel gameplay](docs/screenshots/tunnel.jpg)
 ![Cutscene: the party](docs/screenshots/party.jpg)
 ![Cutscene: the beach](docs/screenshots/beach.jpg)
 
-## What the enhanced pack changes
+### Supreme Warrior
+
+![Fight: first opponent, with the enhanced hands](docs/screenshots/sw-fight1.jpg)
+![Fight: second opponent](docs/screenshots/sw-fight2.jpg)
+![Title](docs/screenshots/sw-title.jpg)
+![Intro](docs/screenshots/sw-intro.jpg)
+![Cutscene on disc 2](docs/screenshots/sw-disc2-cutscene.jpg)
+
+## What the enhanced pack changes (Sewer Shark)
 
 - **Cutscenes and tunnel video:** every FMV frame is replaced by an
   AI-restored version at 4x the original resolution (1280x960 output).
@@ -100,6 +116,72 @@ The last five options are play aids, all off by default:
   saves energy.
 - **Infinite Energy** keeps energy from running out.
 
+## Supreme Warrior
+
+Supreme Warrior is a first-person kung-fu game on two discs: every fight is
+filmed video, with the player's own hands and feet drawn over it by the game.
+
+### What the enhanced pack changes
+
+- **All video, cutscenes and fights:** every FMV frame is replaced by an
+  AI-restored version at 4x the original resolution (1280x960 output).
+- **The player's hands and feet in fights** are drawn from redrawn 4x
+  versions of all 55 poses, in place of the game's blocky originals. The
+  health bars, menus and anything else the game draws stay on top.
+- **Hit effects:** when a hit lands the game flashes or darkens the
+  picture; the enhanced video follows those effects instead of dropping
+  back to the original video.
+- **Pause menu:** the video behind the menu stays enhanced.
+
+The game logic, timing, sound and controls are untouched.
+
+### Installing the packs
+
+There is one pack per disc: `SupremeWarriorHD1.3dov` (Fire and Earth
+fights) and `SupremeWarriorHD2.3dov` (Wind and Fang Tu fights). Put both in
+RetroArch's **System** folder (next to the BIOS) and load either disc as
+usual; the core picks the pack for that disc. Each pack is keyed to its own
+disc, the same way as Sewer Shark's, so any dump of the game works (CHD,
+CUE/BIN, ISO) as long as it is the same disc.
+
+The core looks for `SupremeWarriorHD1` / `SupremeWarriorHD2` in the same
+places and order as for Sewer Shark: a `.txt` file in the System folder
+with the path to the pack, the `.3dov` in the System folder, an unpacked
+folder of that name, or the pack next to the game file.
+
+The story continues on disc 2, which also boots and plays on its own. To
+carry your progress over, set **Quick Menu > Core Options > NVRAM Storage**
+to **Shared**, so both discs use the same save memory.
+
+### Options
+
+Under **Quick Menu > Core Options > Enhanced FMV**:
+
+| Option | What it does in Supreme Warrior | Default |
+| --- | --- | --- |
+| Cutscene Video | Enhanced / Original video, cutscenes and fights alike | Enhanced |
+| Gameplay Video | no effect in this game (all its video counts as cutscene video) | Enhanced |
+| Sprites and Artwork | Enhanced / Original hands and feet in fights | Enhanced |
+| Film Grain | Off / Light / Medium | Off |
+| Auto-Win Fights (cheat) | keeps your health full, lets every hit that lands knock the opponent down, and fights for you while you press nothing | Disabled |
+
+Sewer Shark's play aids (Auto-Steer and so on) are only shown for Sewer Shark.
+
+### Controls
+
+Every fight move is a **direction plus a button**; a button on its own does
+nothing (for example Up + A raises a block). The d-pad and the left stick
+both work. The game's pause menu is on the 3DO **P** button (the top face
+button by default); remap it if you keep pressing it by accident.
+
+### Known limits
+
+- The first frame or two of a new camera shot can show the original video
+  while the enhanced frame is loaded in the background (this keeps the
+  game from stuttering).
+- A hit flash that turns the whole picture one flat colour is shown as the
+  game draws it: there is no picture in it to enhance.
+
 ## Save states and rewind
 
 Save states work as in Opera. Opera's core info file marks save states as
@@ -137,5 +219,6 @@ so RetroArch shows it as Opera.
 
 Same terms as Opera, including the FreeDO conditions on commercial use: see [LICENSE](LICENSE).
 
-Sewer Shark is a trademark of its respective owners. This project is not
-affiliated with or endorsed by them, and contains no game data.
+Sewer Shark and Supreme Warrior are trademarks of their respective owners.
+This project is not affiliated with or endorsed by them, and contains no
+game data.
